@@ -28,6 +28,102 @@ tags:
   - name: assistant
   - name: creation-conversations
 paths:
+  /assistant/web-settings:
+    get:
+      tags: [assistant]
+      summary: 读取助手联网配置与隔离运行能力（密钥不返回）
+      responses:
+        "200":
+          description: data 含 settings.enabled/configured 与 runtime.sandbox/node/python/scope/maxSeconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+    put:
+      tags: [assistant]
+      summary: 可信桌面界面保存 Tavily 配置；助手宿主禁止修改
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+                apiKey: {type: string, maxLength: 1024, description: 留空保留原密钥}
+                clearKey: {type: boolean}
+      responses:
+        "200":
+          description: 脱敏后的配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          description: 需要可信本机界面，宿主不能修改凭据
+  /assistant/projects/{projectId}/{tool}/{action}:
+    post:
+      tags: [assistant]
+      summary: 当前用户工程工作目录、公开联网和素材检索工具
+      description: |
+        实际组合为 workspace/info|files|run|runs|install|skill|asset|publish、
+        web/search|read|download、assets/search。其他组合不存在。
+        内置宿主必须携带当前工程的开放轮次。脚本仅 Windows AppContainer，
+        参数按字面传递，不继承应用凭据，取消/超时结束子进程。
+        原生轨道修改仍走编辑接口；现有文件写入/删除必须携带读取哈希。
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: {type: string}
+        - in: path
+          name: tool
+          required: true
+          schema: {type: string, enum: [workspace, web, assets]}
+        - in: path
+          name: action
+          required: true
+          schema: {type: string, enum: [info, files, run, runs, install, skill, asset, publish, search, read, download]}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: {type: string, enum: [list, read, write, mkdir, remove, search]}
+                path: {type: string, description: 工作目录内相对路径}
+                text: {type: string, maxLength: 524288}
+                expectedHash: {type: string}
+                offset: {type: integer, minimum: 0}
+                runtime: {type: string, enum: [node, python]}
+                script: {type: string}
+                args: {type: array, maxItems: 64, items: {type: string, maxLength: 4096}}
+                packages: {type: array, maxItems: 16, items: {type: string, maxLength: 160}}
+                timeoutSeconds: {type: integer, minimum: 1, maximum: 120}
+                operationId: {type: string, pattern: "^[a-f0-9]{64}$"}
+                name: {type: string}
+                contentHash: {type: string}
+                assetId: {type: string}
+                title: {type: string}
+                kind: {type: string, enum: [image, video, audio, text]}
+                page: {type: integer, minimum: 1}
+                query: {type: string}
+                url: {type: string, format: uri}
+      responses:
+        "200":
+          description: 工具真实结果；脚本含 exitCode/state/output，搜索含真实来源
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: 参数、路径、版本、配置或平台能力不满足要求
+        "403":
+          description: 请求不属于当前本机工程开放轮次
+        "404":
+          description: 工程不属于当前用户
   /projects/{id}/chapter-apply-receipts:
     get:
       tags: [projects]

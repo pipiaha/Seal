@@ -107,6 +107,64 @@ func OutboundHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+// Agent browsing never inherits the development exceptions used by private
+// model channels. Revalidate DNS at connect time and each redirect.
+func ValidatePublicURL(raw string) (*url.URL, error) {
+	return ValidatePublicURLContext(context.Background(), raw)
+}
+func ValidatePublicURLContext(parent context.Context, raw string) (*url.URL, error) {
+	parsed, err := ParsePublicURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	_, err = resolvePublicHost(ctx, parsed.Hostname())
+	return parsed, err
+}
+
+// Source references are not network requests. Do not resolve every search hit;
+// DNS is validated later if the Agent actually reads or downloads that URL.
+func ParsePublicURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || len(raw) > 4096 || parsed.Hostname() == "" || parsed.User != nil || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, BadAuthRequest("公开网页地址无效")
+	}
+	host := normalizeOutboundHost(parsed.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return nil, BadAuthRequest("不允许本机网页地址")
+	}
+	if ip := net.ParseIP(host); ip != nil && blockedCustomRelayIP(ip) {
+		return nil, BadAuthRequest("不允许内网或保留地址")
+	}
+	return parsed, nil
+}
+
+var publicTransport = newOutboundTransportWithProxy(resolvePublicHost, false)
+
+func resolvePublicHost(ctx context.Context, host string) ([]net.IP, error) {
+	addresses, err := resolveOutboundHostWithPolicy(ctx, normalizeOutboundHost(host), false)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range addresses {
+		if blockedCustomRelayIP(ip) {
+			return nil, BadAuthRequest("不允许访问本机、内网或保留地址")
+		}
+	}
+	return addresses, nil
+}
+
+func PublicHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Transport: publicTransport, Timeout: timeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxOutboundRedirects {
+			return errors.New("公开网页重定向次数过多")
+		}
+		_, err := ValidatePublicURLContext(req.Context(), req.URL.String())
+		return err
+	}}
+}
+
 func CustomRelayHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Transport: customRelayTransport,
@@ -248,16 +306,23 @@ func blockedOutboundHeader(name string) bool {
 }
 
 func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, error)) *http.Transport {
+	return newOutboundTransportWithProxy(resolveHost, true)
+}
+func newOutboundTransportWithProxy(resolveHost func(context.Context, string) ([]net.IP, error), allowProxy bool) *http.Transport {
 	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	var proxy func(*http.Request) (*url.URL, error)
+	if allowProxy {
+		proxy = outboundProxyFromEnvironment
+	}
 	return &http.Transport{
-		Proxy: outboundProxyFromEnvironment,
+		Proxy: proxy,
 		DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
 				return nil, err
 			}
 			// 代理地址由部署者通过环境变量配置；目标 URL 仍在请求前经过 SSRF 校验。
-			if configuredProxyHost(host) {
+			if allowProxy && configuredProxyHost(host) {
 				return dialer.DialContext(ctx, network, address)
 			}
 			addresses, err := resolveHost(ctx, host)

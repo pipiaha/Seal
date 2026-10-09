@@ -20,6 +20,8 @@ export function toolActivityLabel(tool: string): string {
     const exact: Record<string, string> = { media_read: "分析音视频素材", edit_transcribe: "转写工程音频", edit_media_info: "分析工程素材", conversation_image_read: "查看对话图片", edit_view: "查看工程画面", read: "读取技能说明", edit_read: "读取剪辑工程", edit_history: "读取剪辑历史",
         edit_undo_entry: "撤销剪辑改动", edit_split_element: "切割片段", edit_remove_element: "删除片段", edit_patch_element: "调整片段",
         skill_list: "查看已安装技能", skill_file: "读取技能文件", skill_author: "编写技能", skill_search: "搜索技能", skill_download: "下载技能",
+        workspace_info: "检查工作目录", workspace_files: "处理工程文件", workspace_skill: "准备技能脚本", workspace_run: "执行工程脚本", workspace_runs: "读取脚本执行记录", workspace_install: "安装工程依赖",
+        workspace_asset_import: "复制素材到工程", workspace_publish: "保存结果到资产库", assets_search: "检索资产库", web_search: "联网搜索", web_read: "读取网页", web_download: "下载工程素材",
         workflow_read: "读取制作流程", workflow_checkpoint: "保存制作进度", media_generation_propose: "准备生成方案",
         media_generation_task: "查询生成任务", media_generation_list: "读取生成方案", media_transcribe: "提交语音识别任务",
         media_transcription: "查询识别结果", media_asr_status: "检查语音识别能力" };

@@ -169,6 +169,8 @@ $env:CANVAS_DESKTOP_DATA_DIR = 'D:\Seal-tests\candidate-workspace'
 
 ## 账号认证与密码找回
 
+助手联网配置复用 `system_settings`，键为 `assistant-web:<sha256(userId)>`，JSON 保存 enabled 和加密的 apiKey；configured 仅为读取投影，不暴露密钥。工程脚本回执位于 `agent-workspaces/projects/<scope>/receipts`，与可写 work 目录隔离，不新增数据库表。素材导入继续使用 resources 和 assets 的归属、验证及去重合同。
+
 | 表 | 用途 | 关键边界 |
 | --- | --- | --- |
 | `users` | 保存用户名、唯一非空邮箱、本地密码哈希、角色和状态 | 密码只保存 bcrypt 哈希；密码找回只面向状态正常且已有本地密码的账号 |

@@ -53,6 +53,8 @@ export function packageAgentHost({ runtime, target, destination, source = path.j
     const bundledNode = path.join(stage, nodeRelative);
     mkdirSync(path.dirname(bundledNode), { recursive: true });
     cpSync(node, bundledNode, { dereference: true });
+    const npmSource = path.join(runtime, 'node_modules', 'npm');
+    if (existsSync(npmSource)) cpSync(npmSource, path.join(stage, 'runtime', 'node_modules', 'npm'), { recursive: true, dereference: true });
     chmodSync(bundledNode, 0o755);
     // Resolve precisely the host imports under the shipped Node and shipped dependency tree.
     const imports = ['@earendil-works/pi-coding-agent', '@earendil-works/pi-ai',

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"infinite-canvas/backend/internal/agentworkspace"
 	"infinite-canvas/backend/internal/appearance"
 	localasset "infinite-canvas/backend/internal/asset"
 	"infinite-canvas/backend/internal/assistantturns"
@@ -89,6 +90,7 @@ type Service struct {
 	workspaceOpsMu           sync.Mutex
 	bindAfterID              string
 	bindCursorMu             sync.Mutex
+	agentWorkspace           *agentworkspace.Manager
 }
 
 const taskWorkerConcurrency = 3
@@ -152,6 +154,7 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	}
 	service := &Service{repo: repo, dataDir: dataDir, mode: options.mode, activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator, localResourceStorage: localResourceStorage, pluginRuntime: pluginRuntime, pluginRuntimeErr: pluginRuntimeErr, workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute}
 	service.taskTerminalCoordinator = newTaskTerminalCoordinator(service)
+	service.agentWorkspace = agentworkspace.New(filepath.Join(dataDir, "agent-workspaces"))
 	service.taskRouteExecutor = newTaskRouteExecutor(service)
 	service.taskWorkerCoordinator = newTaskWorkerCoordinator(service)
 	service.taskLifecycleCoordinator = newTaskLifecycleCoordinator(service)

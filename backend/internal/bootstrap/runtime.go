@@ -383,6 +383,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 	r.closeOnce.Do(func() {
 		r.closed.Store(true)
 		r.status.beginDrain()
+		// Cancel script jobs before HTTP draining waits for their responses.
+		r.service.StopAssistantWorkspace()
 		if r.beefAPI != nil {
 			r.beefAPI.Close()
 		}

@@ -3,6 +3,8 @@ import type { EditWorkspaceContext } from "@/services/api/edit-projects";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { scopedLocalStorage } from "@/lib/user-scope";
+import { captureUserScope, userScopeMatches } from "@/lib/user-scope-guard";
+import { loadAssetsForUse } from "@/services/local-workspace-sync";
 import { flushModelConfig, getModelConfigPersistenceState } from "@/services/model-config-repository";
 import { workspaceCapabilities } from "@/services/workspace-mode";
 import {
@@ -316,6 +318,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         // 发送时冻结归属：此后即使用户切到别的画布，结果也只写回这条记录。
         const targetCanvas = activeCanvasRef.current;
         const selectedSnapshot = [...selectedNodeIds];
+        const publicationScope = captureUserScope();
         const referenceSnapshot = references.map((reference) => ({ ...reference }));
         const skillSelection = selectedSkill ? { ...selectedSkill } : undefined;
         const run = runFor(targetCanvas);
@@ -419,6 +422,15 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     current.toolActivity = [];
                     current.lifecycleNotice = null;
                     onCanvasChangedRef.current?.(targetCanvas, assistantChangedNodeIds(turn.change));
+                    const published = (end.toolCalls || []).filter(call => call.tool === "workspace_publish" && !call.isError)
+                        .map(call => call.args?.assetId).filter((id): id is string => typeof id === "string");
+                    if (published.length) {
+                        void loadAssetsForUse(published, publicationScope).catch(() => {
+                            if (!userScopeMatches(publicationScope)) return;
+                            runFor(targetCanvas).error = "素材已保存，但列表未刷新，请重新打开资产库。";
+                            rerenderIfActive(targetCanvas);
+                        });
+                    }
                     rerenderIfActive(targetCanvas);
                 },
             }, { signal: controller.signal, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, sessionId: run.sessionId ?? undefined, workspaceContext, selectedSkillId: skillSelection?.id, images, media,continuationProposalId:options.continuationProposalId });

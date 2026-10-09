@@ -1,12 +1,13 @@
 #Requires -Version 5.1
 [CmdletBinding()]
-param([switch]$BuildWeb)
+param([switch]$BuildWeb, [string]$OutputName = 'Seal-preview-next.exe')
 
 $ErrorActionPreference = 'Stop'
 $previewBuildRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $previewBuildWeb = Join-Path $previewBuildRoot 'web\dist'
 $previewBuildEmbedded = Join-Path $previewBuildRoot 'backend\cmd\desktop\frontend\dist'
-$previewBuildOutput = Join-Path $previewBuildRoot '.local\cache\edit-browser-tools\Seal-preview-next.exe'
+if ($OutputName -notmatch '^Seal-preview(?:-[a-z0-9-]+)?\.exe$') { throw 'Invalid preview output filename.' }
+$previewBuildOutput = Join-Path (Join-Path $previewBuildRoot '.local\cache\edit-browser-tools') $OutputName
 $previewBuildCache = Split-Path $previewBuildOutput
 New-Item -ItemType Directory -Force -Path (Join-Path $previewBuildCache 'cli') | Out-Null
 

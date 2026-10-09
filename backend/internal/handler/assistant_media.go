@@ -12,7 +12,7 @@ func RegisterAssistantMediaRoutes(api *gin.RouterGroup, svc *app.Service) {
 	registerAssistantPermissionRoutes(api, svc)
 	group := api.Group("/assistant/projects/:projectId/media")
 	group.POST("/read", func(c *gin.Context) {
-		userID, scope, valid := creatorScope(c, svc)
+		userID, _, valid := creatorScope(c, svc)
 		if !valid {
 			return
 		}
@@ -26,10 +26,6 @@ func RegisterAssistantMediaRoutes(api *gin.RouterGroup, svc *app.Service) {
 		}
 		if c.ShouldBindJSON(&request) != nil || (request.AssetID == "") == (request.NodeID == "") {
 			fail(c, 400, app.BadAuthRequest("请选择一个素材或画布节点"))
-			return
-		}
-		if scope != nil && request.AssetID != "" && !scope.AssetIDs[request.AssetID] {
-			fail(c, 403, app.BadAuthRequest("请在当前对话中引用该素材"))
 			return
 		}
 		if request.Frames {

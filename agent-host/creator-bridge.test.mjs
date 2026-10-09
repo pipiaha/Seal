@@ -40,3 +40,27 @@ test('creator tools keep the current turn, immutable skill activation and truthf
   const readOnly = createCreatorBridge({ readOnly: true, turnBudgetContext: new AsyncLocalStorage() }).buildTools('cut_project', [], {}, turn, 'session');
   assert.ok(!readOnly.some(item => ['skill_author', 'skill_download', 'media_transcribe'].includes(item.name)));
 });
+
+test('workspace tools pin enabled Skill contents, pass literal arguments and cancel network requests', async t => {
+  const calls = [];
+  const server = http.createServer(async (req, res) => {
+    let text=''; for await(const bytes of req) text+=bytes;
+    calls.push({path:req.url,body:JSON.parse(text),headers:req.headers});
+    if(req.url.endsWith('/run')) return;
+    res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({code:0,data:{path:'skills/demo/hash'}}));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>{server.closeAllConnections();server.close()});
+  const turn={turnId:'turn-1',skillSnapshot:{skills:[{name:'demo',contentHash:'trusted-hash'}]}};
+  const bridge=createCreatorBridge({opsUrl:`http://127.0.0.1:${server.address().port}/api`,hostToken:'host',desktopToken:'desktop',turnBudgetContext:new AsyncLocalStorage()});
+  const tools=bridge.buildTools('owned-project',[],{},turn,'session');const tool=name=>tools.find(item=>item.name===name);
+  await tool('workspace_skill').execute('copy',{name:'demo',contentHash:'forged'});
+  assert.equal(calls[0].body.contentHash,'trusted-hash');assert.equal(calls[0].headers['x-beeftv-agent-turn'],'turn-1');
+  await assert.rejects(tool('workspace_skill').execute('disabled',{name:'unlisted'}),/skill_not_enabled_this_turn/);
+  const abort=new AbortController();const pending=tool('workspace_run').execute('run',{runtime:'node',script:'run.js',args:['$(literal)','a b']},abort.signal);
+  while(calls.length<2) await new Promise(resolve=>setTimeout(resolve,10));
+  assert.deepEqual(calls[1].body.args,['$(literal)','a b']);assert.equal(calls[1].body.operationId.length,64);
+  abort.abort();await assert.rejects(pending,{name:'AbortError'});
+  const readOnly=createCreatorBridge({readOnly:true,turnBudgetContext:new AsyncLocalStorage()}).buildTools('p',[],{},turn,'s');
+  assert.ok(!readOnly.some(tool=>['workspace_run','workspace_files','workspace_publish','workspace_install','web_download'].includes(tool.name)));
+  assert.ok(readOnly.some(tool=>tool.name==='web_read'));
+});

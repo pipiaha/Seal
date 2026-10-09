@@ -179,7 +179,7 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 		ok(c, result)
 	})
 	group.POST("/media/transcribe", func(c *gin.Context) {
-		userID, scope, valid := creatorScope(c, svc)
+		userID, _, valid := creatorScope(c, svc)
 		if !valid {
 			return
 		}
@@ -191,10 +191,6 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 		}
 		if c.ShouldBindJSON(&request) != nil {
 			fail(c, 400, app.BadAuthRequest("请选择音视频素材"))
-			return
-		}
-		if scope != nil && request.AssetID != "" && !scope.AssetIDs[request.AssetID] {
-			fail(c, 403, app.BadAuthRequest("请在当前对话中引用该音视频素材"))
 			return
 		}
 		policy, available := loadRuntimePolicy(c, svc)

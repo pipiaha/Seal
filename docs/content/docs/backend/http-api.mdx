@@ -107,6 +107,29 @@ Agent 的 `edit_view` 复用这个读取入口：支持指定时间、当前选�
 
 ## 统一操作层与内置创作助手
 
+### 工程文件、脚本与联网工具
+
+`GET /assistant/web-settings` 返回脱敏 `settings`（enabled、configured）和 `runtime`（sandbox、node、python、scope、maxSeconds）。`PUT` 仅接受可信桌面界面，输入 enabled、可选 apiKey、clearKey；留空保留原密钥，clearKey 清除。宿主不能修改该配置。
+
+下列 POST 路径均位于 `/assistant/projects/:projectId`，沿用当前用户工程归属和本机可信身份验证；助手宿主必须提交匹配当前工程的开放轮次。文件及脚本不使用计费生成的批准模式。
+
+| 路径 | 合同 |
+| --- | --- |
+| `/workspace/info` | 工程 Agent 工作目录与实际解释器 / 隔离能力 |
+| `/workspace/files` | action=list/read/write/mkdir/remove/search、path 相对路径；write/remove 已有文件携带 expectedHash；read 可带字节 offset；文本单页 512 KiB |
+| `/workspace/skill` | name、contentHash；复制当前启用的匹配版本技能，不修改原包 |
+| `/workspace/run` | runtime=node/python、script 相对路径、args 字面参数、timeoutSeconds≤120、operationId；返回退出码、状态和限长输出；中断回执不自动重放 |
+| `/workspace/runs` | 最近执行回执摘要，最多 100 条；结果不代替原生工程历史 |
+| `/workspace/install` | runtime、packages 包名及可选版本、operationId；工程 npm（禁用安装脚本）或 Python .venv |
+| `/workspace/asset` | assetId、path；复制当前用户素材为新工作文件 |
+| `/workspace/publish` | path、可选 title；通过资源校验导入图片 / 视频 / 音频到资产库，按内容去重 |
+| `/assets/search` | query、kind、page；检索当前用户资产元数据，每页 30 条；素材理解另用 media_read / ASR |
+| `/web/search` | query；Tavily 真实来源列表，无密钥或未启用明确失败 |
+| `/web/read` | url、可选 offset；公开 HTML/text/JSON，每页 20,000 字节，返回来源和 nextOffset |
+| `/web/download` | url、path；公共地址文件存入新工作文件，最多 256 MiB |
+
+Windows 脚本通过 AppContainer 和 Job Object 隔离，停止 / 超时 / 关闭后端结束子进程；其他平台尚不支持时拒绝执行。工作目录独立于原生轨道，入轨和撤销继续通过已有编辑接口。公共页面工具拒绝内网、回环、保留 IP 和危险重定向，不使用渠道私网豁免。详见 [Agent 工作目录、脚本与联网](/agent-workspace.md)。
+
 `DELETE /assets/:id` 校验素材归属及业务引用。清空回收站时传 `expectedStatus=archived`，在删除事务内再次检查状态；期间已经还原的素材返回 409 并保留。该参数只接受 `archived`，其他值返回 400。省略参数保留普通删除语义，仍须通过引用检查。
 
 `GET /ops` 返回调用者当前身份可用的操作描述（含 JSON Schema）；`POST /ops/:op` 执行单个操作。
