@@ -13,7 +13,7 @@ const modules = ['bundled-runtime.mjs', 'hyperframes.mjs', 'hyperframes-media-cl
   'hypit-productions.mjs', 'hypit-scenes.mjs', 'hyperframes-scenes.mjs', 'library-media.mjs', 'project-store.mjs', 'render-snapshots.mjs',
   'render-worker.mjs', 'render-workers.mjs', 'saved-exports.mjs', 'starter.mjs', 'studio-gateway.mjs', 'studio-localization.mjs',
   'studio-product.mjs', 'studio-product-source.mjs', 'studio-product-client.js', 'studio-product.css',
-  'studio-product-icons.json', 'studio-icons-LICENSE.txt', 'studio-ui-sans.woff2', 'studio-ui-mono.woff2',
+  'visual-frames.mjs', 'studio-product-icons.json', 'studio-icons-LICENSE.txt', 'studio-ui-sans.woff2', 'studio-ui-mono.woff2',
   'studio-font-sans-LICENSE.txt', 'studio-font-mono-LICENSE.txt'];
 const targets = { 'windows/amd64': ['win32', 'x64'], 'darwin/amd64': ['darwin', 'x64'], 'darwin/arm64': ['darwin', 'arm64'] };
 function run(command, args, cwd) {

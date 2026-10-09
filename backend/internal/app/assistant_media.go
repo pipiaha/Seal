@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func (s *Service) AssistantMediaPropose(userID, projectID, operationID, kind, prompt, selectedModel string) (*model.AssistantMediaProposal, error) {
+func (s *Service) AssistantMediaPropose(userID, projectID, operationID, kind, prompt, selectedModel string, sessions ...string) (*model.AssistantMediaProposal, error) {
 	if _, err := s.UserAssistantProject(userID, projectID); err != nil {
 		return nil, err
 	}
@@ -34,14 +34,33 @@ func (s *Service) AssistantMediaPropose(userID, projectID, operationID, kind, pr
 	}
 	hash := sha256.Sum256([]byte(userID + "\x00" + projectID + "\x00" + operationID))
 	item := &model.AssistantMediaProposal{ID: "media_" + hex.EncodeToString(hash[:]), UserID: userID, ProjectID: projectID, Kind: kind, Prompt: prompt, Model: display, ModelKey: key, ConfigRevision: revision}
+	if len(sessions) > 0 && sessions[0] != "" {
+		if !assistantSessionID.MatchString(sessions[0]) {
+			return nil, kernel.BadAuthRequest("对话标识无效")
+		}
+		item.SessionID = sessions[0]
+		item.AutoContinue = true
+	}
 	if err := s.repo.CreateAssistantMediaProposal(item); err != nil {
 		return nil, err
+	}
+	// Read after insertion so an in-flight proposal arriving after Stop stays stopped.
+	if item.SessionID != "" {
+		stopped, err := s.assistantMediaSessionStopped(userID, projectID, item.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if stopped {
+			if err := s.repo.StopAssistantMediaSession(userID, projectID, item.SessionID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	stored, err := s.repo.AssistantMediaProposal(userID, projectID, item.ID)
 	if err != nil {
 		return nil, err
 	}
-	if stored.Kind != kind || stored.Prompt != prompt || stored.ModelKey != key {
+	if stored.Kind != kind || stored.Prompt != prompt || stored.ModelKey != key || stored.SessionID != item.SessionID {
 		return nil, kernel.BadAuthRequest("生成提议标识已用于其他内容")
 	}
 	return stored, nil
@@ -54,16 +73,35 @@ func (s *Service) AssistantMediaProposals(userID, projectID string) ([]model.Ass
 	return s.repo.AssistantMediaProposals(userID, projectID)
 }
 
-// Called only after trusted UI accepts the visible proposal. SDK tools cannot
+// Called by trusted UI after explicit approval or persisted allow mode. SDK tools cannot
 // call this paid path. Existing admission, encrypted credentials, delivery and
 // recovery remain authoritative; the proposal is a durable identity, not a worker.
-func (s *Service) AcceptAssistantMedia(userID, projectID, proposalID string, request localtask.CreateRequest) (*model.Task, error) {
+func (s *Service) AcceptAssistantMedia(userID, projectID, proposalID string, request localtask.CreateRequest, automatic ...bool) (*model.Task, error) {
 	if _, err := s.UserAssistantProject(userID, projectID); err != nil {
 		return nil, err
 	}
 	proposal, err := s.repo.AssistantMediaProposal(userID, projectID, proposalID)
 	if err != nil {
 		return nil, err
+	}
+	if proposal.Decision == "rejected" || (len(automatic) > 0 && automatic[0] && !proposal.AutoContinue) {
+		return nil, kernel.BadAuthRequest("方案已拒绝或自动制作已停止")
+	}
+	if len(automatic) > 0 && automatic[0] {
+		mode, err := s.AssistantPermissionMode(userID, projectID, proposal.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if mode != "allow" {
+			return nil, kernel.BadAuthRequest("当前对话需要你批准生成")
+		}
+		stopped, err := s.assistantMediaSessionStopped(userID, projectID, proposal.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if stopped {
+			return nil, kernel.BadAuthRequest("自动制作已停止，请发送新的要求后继续")
+		}
 	}
 	operationID := "assistant-media:" + proposal.ID
 	if previous, err := s.repo.TaskByClientOperation(userID, operationID); err != nil {
@@ -102,7 +140,18 @@ func (s *Service) AcceptAssistantMedia(userID, projectID, proposalID string, req
 	metadata["clientOperationId"] = operationID
 	metadata["source"] = "assistant_media"
 	metadata["proposalId"] = proposal.ID
+	metadata["assistantPermissionMode"] = "ask"
+	if len(automatic) > 0 && automatic[0] {
+		metadata["assistantPermissionMode"] = "allow"
+	}
 	request.Input["metadata"] = metadata
+	approved, err := s.repo.ApproveAssistantMedia(userID, projectID, proposal.ID, len(automatic) > 0 && automatic[0])
+	if err != nil {
+		return nil, err
+	}
+	if !approved {
+		return nil, kernel.BadAuthRequest("方案已拒绝、已停止或正在提交，请重新读取任务")
+	}
 	task, err := s.CreateLocalTask(userID, request)
 	if err != nil {
 		return nil, err

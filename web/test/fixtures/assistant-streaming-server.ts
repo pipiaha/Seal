@@ -19,7 +19,7 @@ const config = { ...defaultConfig, assistantModel: 'fixture::test', channels: [c
 const histories = new Map<string, any[]>();
 for (const [canvas, count] of [['short', 4], ['long', 200]] as const) histories.set(canvas, Array.from({ length: count }, (_, index) => ({ turnId: `${canvas}-${index}`, userText: `历史问题 ${index + 1}`,
     selectedNodeIds: [], reply: `### 第 ${index + 1} 次剪辑\n\n检查画面和声音，保持当前工程的素材与节奏。\n\n- 已读取素材\n- 已检查片段\n\n这是保存的历史回复。`, toolCalls: [], proposals: [], change: null, error: null, cancelled: false, createdAt: '' } )));
-let active: { canvas: string; send: (value: unknown) => void; close: () => void; phase: number; reply: string } | null = null;
+let active: { canvas: string; turnId: string; userText: string; instructions: any[]; send: (value: unknown) => void; close: () => void; disconnect: () => void; phase: number; reply: string } | null = null;
 const ok = (data: unknown) => Response.json({ code: 0, data });
 const server = Bun.serve({ port: Number(process.env.SEAL_ASSISTANT_FIXTURE_PORT || 0), hostname: '127.0.0.1', idleTimeout: 255, async fetch(request) {
     const url = new URL(request.url), route = url.pathname;
@@ -28,6 +28,9 @@ const server = Bun.serve({ port: Number(process.env.SEAL_ASSISTANT_FIXTURE_PORT 
     if (route.startsWith('/static/') && !route.includes('..')) return new Response(await fs.readFile(path.join(dist, route)), { headers: { 'content-type': route.endsWith('.css') ? 'text/css' : 'application/octet-stream' } });
     if (route === '/fixture/advance') {
         if (active) {
+            for (const instruction of active.instructions) if (instruction.state === 'queued') {
+                instruction.state = 'received'; active.send({ type: 'instruction', instruction });
+            }
             active.phase++;
             if (active.phase === 1) active.send({ type: 'tool', phase: 'update', toolCallId: 'read', tool: 'edit_read' });
             if (active.phase === 2) {
@@ -50,21 +53,36 @@ const server = Bun.serve({ port: Number(process.env.SEAL_ASSISTANT_FIXTURE_PORT 
     if (route === '/fixture/finish' || route.endsWith('/assistant/cancel')) {
         if (active) {
             const cancelled = route.endsWith('/cancel');
-            const turn = { turnId: 'live-' + Date.now(), userText: '请检查片段并说明结果', reply: active.reply, selectedNodeIds: [], toolCalls: [], proposals: [], change: null, error: null, cancelled, createdAt: '' };
+            const turn = { turnId: active.turnId, userText: active.userText, instructions: active.instructions.map(item => ({ ...item, state: item.state === 'queued' ? 'not_processed' : item.state })), reply: active.reply, selectedNodeIds: [], toolCalls: [], proposals: [], change: null, error: null, cancelled, createdAt: '' };
             histories.get(active.canvas)?.push(turn);
             active.send({ type: 'turn_end', ...turn }); active.close(); active = null;
         }
         return ok({});
     }
+    if (route === '/fixture/disconnect') { active?.disconnect(); return ok({}); }
+    if (route.endsWith('/assistant/steer')) {
+        const body = await request.json();
+        if (!active || body.turnId !== active.turnId || body.sessionId !== active.canvas) return Response.json({ code: 409, reason: 'turn_not_running' }, { status: 409 });
+        const previous = active.instructions.find(item => item.instructionId === body.instructionId);
+        if (previous) return ok(previous);
+        const instruction = { ...body, state: 'queued' };
+        active.instructions.push(instruction);
+        return ok(instruction);
+    }
     if (route.endsWith('/assistant/chat')) {
         const body = await request.json();
+        let disconnected = false;
         return new Response(new ReadableStream({ start(controller) {
             const encoder = new TextEncoder();
-            active = { canvas: body.canvasId, reply: '', phase: 0, send: value => controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')), close: () => controller.close() };
+            active = { canvas: body.canvasId, turnId: 'live-' + Date.now(), userText: body.message, instructions: [], reply: '', phase: 0,
+                send: value => { if (!disconnected) controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')); },
+                close: () => { if (!disconnected) controller.close(); }, disconnect: () => { disconnected = true; controller.error(new Error('fixture disconnected')); } };
+            active.send({ type: 'turn_start', turnId: active.turnId, sessionId: body.canvasId });
             active.send({ type: 'tool', phase: 'start', toolCallId: 'read', tool: 'edit_read' });
-        } }), { headers: { 'content-type': 'application/x-ndjson' } });
+        }, cancel() { disconnected = true; } }), { headers: { 'content-type': 'application/x-ndjson' } });
     }
-    if (route.endsWith('/assistant/history')) return ok({ sessionId: url.searchParams.get('canvasId'), turns: histories.get(url.searchParams.get('canvasId') || '') || [] });
+    if (route.endsWith('/assistant/history')) return ok({ sessionId: url.searchParams.get('canvasId'), turns: histories.get(url.searchParams.get('canvasId') || '') || [],
+        activeTurn: active?.canvas === url.searchParams.get('canvasId') ? { sessionId: active.canvas, turnId: active.turnId, userText: active.userText, selectedNodeIds: [], instructions: active.instructions } : null });
     if (route.endsWith('/assistant/sessions')) return ok({ currentSessionId: url.searchParams.get('canvasId'), sessions: [] });
     if (route.endsWith('/assistant/status')) return ok({ available: true, model: { id: 'test', channelId: 'fixture' } });
     if (route.endsWith('/assistant/ui-session')) return ok({ token: 'fixture-only', expiresAt: new Date(Date.now() + 1800000).toISOString() });

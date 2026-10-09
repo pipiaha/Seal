@@ -14,7 +14,7 @@ test('creator tools keep the current turn, immutable skill activation and truthf
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
-  const turn = { turnId: 'turn_1', proposals: [], workflowJournal: { read: () => [{ id: 'plan', steps: [{ id: 'voice' }] }] }, skillSnapshot: { skills: [{ name: 'skill-creator' }] } };
+  const turn = { turnId: 'turn_1', sessionId: 'session_1', proposals: [], workflowJournal: { read: () => [{ id: 'plan', steps: [{ id: 'voice' }] }] }, skillSnapshot: { skills: [{ name: 'skill-creator' }] } };
   const bridge = createCreatorBridge({ opsUrl: `http://127.0.0.1:${server.address().port}/api`, hostToken: 'host', desktopToken: 'desktop', turnBudgetContext: new AsyncLocalStorage() });
   const tools = bridge.buildTools('cut_project', [], {}, turn, 'same_session');
   const tool = name => tools.find(item => item.name === name);
@@ -29,6 +29,7 @@ test('creator tools keep the current turn, immutable skill activation and truthf
   assert.equal(JSON.parse(transcription.content[0].text).status, 'queued');
   await tool('media_generation_propose').execute('first-turn-call', { kind: 'audio', prompt: 'exact text', workflowId: 'plan', stepId: 'voice' });
   const generationKey = calls.at(-1).body.operationId;
+  assert.equal(calls.at(-1).body.sessionId, 'session_1');
   turn.turnId = 'resumed-turn';
   await tool('media_generation_propose').execute('different-resume-call', { kind: 'audio', prompt: 'exact text', workflowId: 'plan', stepId: 'voice' });
   assert.equal(calls.at(-1).body.operationId, generationKey);

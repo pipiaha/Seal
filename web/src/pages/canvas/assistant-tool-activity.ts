@@ -17,7 +17,7 @@ export function settleToolActivity(items: AssistantToolActivity[]): AssistantToo
 }
 
 export function toolActivityLabel(tool: string): string {
-    const exact: Record<string, string> = { read: "读取技能说明", edit_read: "读取剪辑工程", edit_history: "读取剪辑历史",
+    const exact: Record<string, string> = { media_read: "分析音视频素材", edit_transcribe: "转写工程音频", edit_media_info: "分析工程素材", conversation_image_read: "查看对话图片", edit_view: "查看工程画面", read: "读取技能说明", edit_read: "读取剪辑工程", edit_history: "读取剪辑历史",
         edit_undo_entry: "撤销剪辑改动", edit_split_element: "切割片段", edit_remove_element: "删除片段", edit_patch_element: "调整片段",
         skill_list: "查看已安装技能", skill_file: "读取技能文件", skill_author: "编写技能", skill_search: "搜索技能", skill_download: "下载技能",
         workflow_read: "读取制作流程", workflow_checkpoint: "保存制作进度", media_generation_propose: "准备生成方案",

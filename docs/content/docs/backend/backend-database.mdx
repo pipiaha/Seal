@@ -17,7 +17,7 @@ description: Seal后端核心持久化表与状态边界
 
 旧版本不能读取这个加密封装。降级前须停止所有工作区写入者，恢复升级前的完整工作区备份；不能只替换可执行文件后继续写入新配置。自动更新器的二进制回滚与工作区数据恢复是不同操作。
 
-当前完整重构候选的结构版本为 v15。正式 v1.6.21 的结构版本为 v3，历史 Agent 候选曾使用 v3–v6，另有图片恢复预览分支使用 v3 或 v7；这些预览编号不能当作正式版本已发布的证据。以下旧托管数据库的 `schema_migrations` 版本历史与本地版本分开维护，不共用版本号。
+当前本地工作区的结构版本为 v18。正式 v1.6.21 的结构版本为 v3，历史 Agent 候选曾使用 v3–v6，另有图片恢复预览分支使用 v3 或 v7；这些预览编号不能当作正式版本已发布的证据。以下旧托管数据库的 `schema_migrations` 版本历史与本地版本分开维护，不共用版本号。
 
 v14 `editing-asset-references` 追加 `editing_asset_references`，保存用户、画布、编辑工程、资产与资源的关联。导入操作身份参与引用主键，重复导入请求沿用同一引用。确认被拒绝的新导入移除引用；响应丢失或运行端结果不确定时保留，供同一操作重试确认。资产删除的服务检查和数据库删除事务均检查这些引用。引用包括可撤销的旧片段，删除轨道片段不会立即解除资产保护；当前尚未提供清理剪辑工程历史及释放引用的产品入口。这张表仅保存素材来源，不保存第二份轨道工程。
 
@@ -112,8 +112,10 @@ $env:CANVAS_DESKTOP_DATA_DIR = 'D:\Seal-tests\candidate-workspace'
 
 ### 本地工作区结构（桌面形态）
 
-桌面形态使用由 `local_schema_migrations` 管理的本地结构版本（当前为 17，见 `backend/internal/database/local_schema.go`），
+桌面形态使用由 `local_schema_migrations` 管理的本地结构版本（当前为 18，见 `backend/internal/database/local_schema.go`），
 与上面的托管版本序列相互独立。版本 11 由会话工作单独占用，本序列从 10 直接进入 12。
+
+版本 18 `assistant-permissions-continuation` 为 `assistant_media_proposals` 增加 `session_id`、`decision`、`auto_continue` 和 `continuation_turn_id`：制作方案绑定原对话，保存拒绝/停止状态，并以原子条件更新保证同一结果最多受理一次自动续接。旧方案不自动启用续接。对话权限复用 `system_settings`，以用户、工程、SDK 会话 ID 的摘要作为键，`assist-perm:` 保存 JSON 字符串 `ask/allow`，`assist-stop:` 保存停止布尔值；不保存模型密钥。停止后的晚到方案保持停用，用户明确发起下一轮才恢复新方案；旧方案不自行重新启用。
 
 版本 3 `agent-operation-records` 为既有版本 2 工作区创建 `agent_op_records` 及用户、操作 ID 联合主键；版本 4/5 为任务的客户端操作编号补充结构；版本 6 `agent-operation-turn-attribution` 为 `agent_op_records` 增加可空的 `turn_id` 与索引，用于把内置助手一轮对话的写入回执归到该轮上。迁移只新增结构，不重写画布、项目或任务数据；结构创建与迁移记录在同一事务中提交。重复启动不会重复迁移，已成功操作的幂等结果在重启后继续回放。
 
@@ -186,7 +188,7 @@ $env:CANVAS_DESKTOP_DATA_DIR = 'D:\Seal-tests\candidate-workspace'
 | `skill_files` | 保存某个版本的文件索引 | `(skill_version_id, path)` 唯一；只保存路径、类型、MIME、大小和 SHA-256，不保存正文 |
 | `user_skill_states` | 保存用户的加入、收藏、安装版本、自动更新选择和可空的 `runtime_enabled` | Runtime 启停独立于旧 `added`；未设置时仅内置 Runtime Skill 默认启用 |
 | `skill_runtime_revisions` | 按 `user_id` 保存 Runtime 清单的递增版本 | 本地结构 v16；快照同时包含内容指纹，变更在下一轮对话加载 |
-| `assistant_media_proposals` | 助手提出的图片、视频、配音方案与已受理任务编号 | 本地结构 v17；保存当前用户、工程、提示词、模型键、配置版本与 Task ID；不保存密钥。界面确认后沿用任务账本的稳定操作编号，重开时复用原任务 |
+| `assistant_media_proposals` | 助手提出的图片、视频、配音方案与已受理任务编号 | 本地结构 v18；保存用户、工程、会话、模型配置、决定、停止/续接及 Task ID；不保存密钥。界面批准或显式完全允许后沿用任务账本稳定操作编号，重开时复用原任务 |
 
 用户 Skill 的 `source_type` 可为 `authored`（助手沉淀）或 `github`（按用户要求下载）；下载保存真实提交、子目录和来源，版本保持不可变。原仓库的适用许可证、声明文件随选中技能保留。
 制作步骤与中间结果编号使用官方 Pi `SessionManager` 的 `beeftv.creator-workflow` 自定义条目保存，带修订号和操作回执，不增加第二套聊天数据库。记录的步骤状态属于计划，实际进度从任务或制作运行端读取。

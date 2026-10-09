@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { App, Button, Dropdown, InputNumber, Spin } from 'antd';
 import { ArrowLeft, RefreshCw, Sparkles } from 'lucide-react';
-import { openEditProject, getEditContext, listEditMaterials, type EditLaunch } from '@/services/api/edit-projects';
+import { openEditProject, getEditContext, listEditMaterials, readEditVisual, type EditLaunch } from '@/services/api/edit-projects';
+import type { AssistantImage } from '@/services/api/agent-assistant';
 import type { CanvasResourceReference } from '@/lib/canvas/canvas-resource-references';
 import { CanvasAssistantSidebar } from '@/pages/canvas/canvas-assistant-sidebar';
 import { useCanvasAssistant } from '@/pages/canvas/use-canvas-assistant';
@@ -47,6 +48,20 @@ export default function EditProjectPage() {
     const sizeRequests = useRef(new Map<string, { resolve: (size: { width: number; height: number }) => void; reject: (error: Error) => void; timeout: number }>());
     const formRef = useRef<HTMLFormElement>(null);
     const frameRef = useRef<HTMLIFrameElement>(null);
+    const visualRequests = useRef(new Map<string, { resolve: (selection: { playheadTime: number; clipIds: string[] }) => void; reject: (error: Error) => void; timeout: number }>());
+    const visualSelection = useCallback(async () => {
+        if (!launch || !frameRef.current?.contentWindow) throw new Error('剪辑编辑器尚未就绪');
+        const requestId = crypto.randomUUID();
+        return new Promise<{ playheadTime: number; clipIds: string[] }>((resolve, reject) => {
+            const timeout = window.setTimeout(() => { visualRequests.current.delete(requestId); reject(new Error('读取播放位置超时，请重试')); }, 10_000);
+            visualRequests.current.set(requestId, { resolve, reject, timeout });
+            frameRef.current!.contentWindow!.postMessage({ type: 'beeftv:visual-context', editId: launch.editId, requestId }, launch.studioUrl);
+        });
+    }, [launch]);
+    useEffect(() => () => {
+        for (const pending of visualRequests.current.values()) { window.clearTimeout(pending.timeout); pending.reject(new Error('剪辑页面已切换')); }
+        visualRequests.current.clear();
+    }, [projectId, launch?.editId]);
     const updateRequests = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void; timeout: number }>());
     const frameName = `beeftv-edit-${projectId}`;
     const materials = useQuery({ queryKey: ['editing-materials', scope.userScope, scope.epoch, projectId, launch?.editId, revision],
@@ -56,7 +71,12 @@ export default function EditProjectPage() {
         text: material.file, active: true, mentionToken: `@[media:${material.file}]`,
     })), [materials.data]);
     const assistant = useCanvasAssistant({ canvasId: projectId,
-        getWorkspaceContext: () => launch ? getEditContext(projectId, launch.editId, scope) : Promise.reject(new Error('编辑工程还未打开')),
+        getWorkspaceContext: async () => {
+            if (!launch) throw new Error('编辑工程还未打开');
+            const selection = await visualSelection();
+            const context = await getEditContext(projectId, launch.editId, scope);
+            return { ...context, selection };
+        },
         onCanvasChanged: () => frameRef.current?.contentWindow?.postMessage({ type: 'beeftv:edit-context' }, launch?.studioUrl || ''),
     });
     const locateNodes = useCallback(() => navigate('/project'), [navigate]);
@@ -105,6 +125,15 @@ export default function EditProjectPage() {
     useEffect(() => {
         const receive = (event: MessageEvent) => {
             if (event.origin !== launch?.studioUrl || event.source !== frameRef.current?.contentWindow || event.data?.editId !== launch.editId) return;
+            if (event.data.type === 'beeftv:visual-context-result') {
+                const pending = visualRequests.current.get(event.data.requestId);
+                if (!pending) return;
+                window.clearTimeout(pending.timeout); visualRequests.current.delete(event.data.requestId);
+                if (event.data.error) pending.reject(new Error(event.data.error));
+                else if (!Number.isFinite(event.data.selection?.playheadTime) || !Array.isArray(event.data.selection?.clipIds)) pending.reject(new Error('播放位置无效'));
+                else pending.resolve(event.data.selection);
+                return;
+            }
             if (event.data.type === 'beeftv:update-prepared') {
                 const pending = updateRequests.current.get(event.data.requestId);
                 if (!pending) return;
@@ -222,6 +251,31 @@ export default function EditProjectPage() {
             {assistant.open ? <div className="editing-assistant-column" style={{ width: assistant.width }}>
                 {materials.isError ? <div className="editing-materials-error" role="alert">素材列表读取失败<Button type="text" size="small" onClick={() => void materials.refetch()}>重试</Button></div> : null}
                 <CanvasAssistantSidebar assistant={assistant} canvasTitle={project.data?.title || '剪辑工程'} dockable readOnly={!launch} prefill={assistantPrefill}
+                captureVisual={async target => {
+                    if (!launch) throw new Error('剪辑工程尚未打开');
+                    const selection = await visualSelection();
+                    if (target === 'selection' && !selection.clipIds.length) throw new Error('请先在时间线上选择片段');
+                    const context = await getEditContext(projectId, launch.editId, scope);
+                    const result = await readEditVisual(projectId, launch.editId, { expectedRevision: context.revision,
+                        ...(target === 'selection' ? { clipIds: selection.clipIds } : { time: selection.playheadTime }) }, scope);
+                    return result.images.map((image): AssistantImage => ({ id: crypto.randomUUID(), name: `${target === 'selection' ? '选中片段' : '当前画面'} · ${image.time.toFixed(2)}s`,
+                        mimeType: image.mimeType, data: image.data, source: `edit:${launch.editId};revision:${result.revision};time:${image.time};clips:${selection.clipIds.join(',')}`.slice(0, 512) }));
+                }}
+                resolveVisualReferences={async text => {
+                    if (!launch) throw new Error('剪辑工程尚未打开');
+                    const files = [...new Set(Array.from(text.matchAll(/@\[media:([^\]]+)\]/g), match => match[1]))];
+                    if (files.length > 8) throw new Error('一次最多引用 8 个工程素材');
+                    const images: AssistantImage[] = [];
+                    for (const file of files) {
+                        const material = materials.data?.materials.find(material => material.file === file);
+                        if (!material) throw new Error('引用的素材已变化，请重新选择');
+                        if (material.kind !== 'image') continue;
+                        const result = await readEditVisual(projectId, launch.editId, { file }, scope);
+                        images.push(...result.images.map((image): AssistantImage => ({ id: crypto.randomUUID(), name: material.title.slice(0, 120),
+                            mimeType: image.mimeType, data: image.data, source: `media:${file};revision:${result.revision};time:${image.time}`.slice(0, 512) })));
+                    }
+                    return images;
+                }}
                 selectedNodeIds={[]} references={references} includeAssetLibrary={false} workspaceLabel="当前剪辑工程" referencesLabel="工程素材" onLocateNodes={locateNodes}
                 proposalActionLabel="去画布生成" onRunProposal={runProposal}
                 onOpenModelSettings={() => navigate('/settings')} /></div> : null}

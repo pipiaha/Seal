@@ -24,6 +24,7 @@ function Harness() {
                 <button disabled={assistant.streaming} onClick={() => void assistant.send('请检查片段并说明结果', [])}>发送模拟请求</button>
                 <button onClick={() => void fetch('/fixture/advance', { method: 'POST' })}>推进工具</button>
                 <button onClick={() => void fetch('/fixture/finish', { method: 'POST' })}>结束回复</button>
+                <button onClick={() => void fetch('/fixture/disconnect', { method: 'POST' })}>模拟断流</button>
                 <button onClick={() => setDark(value => !value)}>切换主题</button>
                 <p>当前工程：{canvasId} · 历史 {assistant.turns.length} 回合</p>
             </div>

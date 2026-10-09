@@ -23,7 +23,7 @@ import (
 )
 
 // agentProxyMaxBody 限制转发体积；解析失败或超限都按真实失败返回。
-const agentProxyMaxBody = 64 << 10
+const agentProxyMaxBody = 18 << 20
 
 // hostStartGrace 是宿主从拉起到健康的宽限期：这段时间里状态是「正在启动」而不是「不可达」。
 const hostStartGrace = 20 * time.Second
@@ -94,7 +94,7 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			unavailable(c, reason)
 			return
 		}
-		modelInfo := gin.H{"id": provider.Model, "channelId": provider.ChannelID, "channelName": provider.ChannelName}
+		modelInfo := gin.H{"id": provider.Model, "channelId": provider.ChannelID, "channelName": provider.ChannelName, "maxImages": provider.MaxImages, "maxImageBytes": provider.MaxImageBytes}
 		health := host.Probe(c.Request.Context())
 		state := host.State()
 		if health.OK {
@@ -352,13 +352,16 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			return
 		}
 		var payload struct {
-			CanvasID         string                `json:"canvasId"`
-			WorkspaceContext *editWorkspaceContext `json:"workspaceContext"`
-			Message          string                `json:"message"`
-			SelectedNodeIDs  []string              `json:"selectedNodeIds"`
-			SessionID        string                `json:"sessionId"`
-			References       []assistantReference  `json:"references"`
-			SelectedSkillID  string                `json:"selectedSkillId"`
+			CanvasID               string                `json:"canvasId"`
+			WorkspaceContext       *editWorkspaceContext `json:"workspaceContext"`
+			Message                string                `json:"message"`
+			SelectedNodeIDs        []string              `json:"selectedNodeIds"`
+			SessionID              string                `json:"sessionId"`
+			References             []assistantReference  `json:"references"`
+			SelectedSkillID        string                `json:"selectedSkillId"`
+			Images                 []assistantImage      `json:"images"`
+			Media                  []assistantMediaInput `json:"media"`
+			ContinuationProposalID string                `json:"continuationProposalId"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil || strings.TrimSpace(payload.CanvasID) == "" || strings.TrimSpace(payload.Message) == "" {
 			fail(c, http.StatusBadRequest, app.BadAuthRequest("canvasId 与 message 必填"))
@@ -367,6 +370,17 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 		canvasRaw, allowed := requireOwnedCanvas(c, payload.CanvasID)
 		if !allowed {
 			return
+		}
+		if len(payload.Images) > 0 {
+			provider, providerErr := svc.ResolveAssistantProvider()
+			if providerErr != nil {
+				failService(c, providerErr)
+				return
+			}
+			if imageErr := validateAssistantImages(payload.Images, provider); imageErr != nil {
+				c.JSON(400, gin.H{"code": 400, "reason": "image_input_invalid", "msg": imageErr.Error()})
+				return
+			}
 		}
 		if payload.WorkspaceContext != nil {
 			context, valid := validateEditWorkspaceContext(c, payload.CanvasID, payload.WorkspaceContext)
@@ -385,6 +399,25 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			fail(c, http.StatusBadRequest, app.BadAuthRequest(refErr.Error()))
 			return
 		}
+		if payload.ContinuationProposalID != "" {
+			ids, err := svc.AssistantMediaContinuationAssets(c.GetString("agentUserId"), payload.CanvasID, payload.SessionID, payload.ContinuationProposalID)
+			if err != nil {
+				c.JSON(409, gin.H{"code": 409, "reason": "media_continuation_unavailable", "msg": err.Error()})
+				return
+			}
+			for _, id := range ids {
+				references = append(references, assistantReference{Kind: "asset", ID: id})
+			}
+		}
+		media, mediaErr := normalizeAssistantMedia(svc, c.GetString("agentUserId"), payload.CanvasID, canvasRaw, references, payload.Media)
+		if mediaErr != nil {
+			c.JSON(400, gin.H{"code": 400, "reason": "media_input_invalid", "msg": mediaErr.Error()})
+			return
+		}
+		var mediaBody map[string]json.RawMessage
+		_ = json.Unmarshal(body, &mediaBody)
+		mediaBody["media"], _ = json.Marshal(media)
+		body, _ = json.Marshal(mediaBody)
 		// 选中对象必须真的属于该画布，否则拒绝（不能借选中绕过 scope）。
 		if len(payload.SelectedNodeIDs) > 0 {
 			var canvasDoc struct {
@@ -437,6 +470,15 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			failService(c, snapshotErr)
 			return
 		}
+		if payload.ContinuationProposalID != "" {
+			claimed, err := svc.ClaimAssistantMediaContinuation(c.GetString("agentUserId"), payload.CanvasID, payload.SessionID, payload.ContinuationProposalID, turnID)
+			if err != nil || !claimed {
+				_ = svc.FinalizeAssistantTurn(turnID)
+				c.Header("X-Beeftv-Turn-Admission", "rejected")
+				c.JSON(409, gin.H{"code": 409, "reason": "media_continuation_unavailable", "msg": "制作结果已被处理或已停止"})
+				return
+			}
+		}
 		c.Header("X-Beeftv-Turn-Admission", "admitted")
 		// 回合状态由自己的回执结算，和浏览器流是两件事：无论下面走哪条返回路径
 		// （宿主不可达、宿主拒绝、浏览器中途断开、正常结束），都已经落地的操作都要可追溯。
@@ -457,6 +499,7 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			failService(c, err)
 			return
 		}
+		trustedBody["contextOverview"], _ = json.Marshal(assistantContextOverview(canvasRaw, payload.SelectedNodeIDs))
 		forwarded, err = json.Marshal(trustedBody)
 		if err != nil {
 			failService(c, err)
@@ -511,6 +554,40 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 				return
 			}
 		}
+	})
+
+	r.POST("/assistant/steer", func(c *gin.Context) {
+		if !guard(c, true) {
+			return
+		}
+		body, payload, valid := readAssistantBody(c, struct {
+			CanvasID      string `json:"canvasId"`
+			SessionID     string `json:"sessionId"`
+			TurnID        string `json:"turnId"`
+			InstructionID string `json:"instructionId"`
+			Message       string `json:"message"`
+		}{})
+		if !valid {
+			return
+		}
+		if _, allowed := requireOwnedCanvas(c, payload.CanvasID); !allowed {
+			return
+		}
+		if payload.SessionID == "" || payload.TurnID == "" || payload.InstructionID == "" || strings.TrimSpace(payload.Message) == "" || len(payload.Message) > 24000 {
+			fail(c, 400, app.BadAuthRequest("补充指令缺少当前回合信息或内容过长"))
+			return
+		}
+		scope, open, err := svc.AssistantTurnScopeForHost(c.GetString("agentUserId"), payload.TurnID)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !open || scope.CanvasID != payload.CanvasID {
+			c.JSON(409, gin.H{"code": 409, "reason": "turn_not_running", "msg": "当前回合已结束，请发送新消息"})
+			return
+		}
+		// Scope and selected Skill stay frozen. Steering cannot expand permissions.
+		hostJSON(c, http.MethodPost, "/steer", body)
 	})
 
 	r.POST("/assistant/cancel", func(c *gin.Context) {

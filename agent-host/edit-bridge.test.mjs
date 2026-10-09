@@ -6,7 +6,7 @@ import { createEditBridge } from './edit-bridge.mjs';
 const parameters = { opsUrl: 'http://127.0.0.1:1/api', hostToken: 'test-only', desktopToken: 'test-only', turnBudgetContext: new AsyncLocalStorage() };
 test('read-only assistants receive no editing write tools', () => {
   const tools = createEditBridge({ ...parameters, readOnly: true }).buildTools('canvas_1', [], {}, {}, 'session_1');
-  assert.deepEqual(tools.map(tool => tool.name), ['edit_read', 'edit_history']);
+  assert.deepEqual(tools.map(tool => tool.name), ['edit_view', 'edit_media_info', 'edit_read', 'edit_history']);
 });
 test('edit commands cannot escape the frozen project or write without a tool-call identity', async () => {
   const bridge = createEditBridge(parameters);

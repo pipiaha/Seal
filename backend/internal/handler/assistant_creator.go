@@ -185,6 +185,7 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 		}
 		var request struct {
 			AssetID  string `json:"assetId"`
+			NodeID   string `json:"nodeId"`
 			Language string `json:"language"`
 			Route    string `json:"route"`
 		}
@@ -192,7 +193,7 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 			fail(c, 400, app.BadAuthRequest("请选择音视频素材"))
 			return
 		}
-		if scope != nil && !scope.AssetIDs[request.AssetID] {
+		if scope != nil && request.AssetID != "" && !scope.AssetIDs[request.AssetID] {
 			fail(c, 403, app.BadAuthRequest("请在当前对话中引用该音视频素材"))
 			return
 		}
@@ -200,7 +201,7 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 		if !available || !enforceRateLimit(c, "timeline-ts:"+userID, policy.Request.TaskCreatePerMinute, time.Minute) {
 			return
 		}
-		task, err := svc.AssistantTranscribeAsset(userID, c.Param("projectId"), request.AssetID, request.Language, request.Route)
+		task, err := svc.AssistantTranscribeMedia(userID, c.Param("projectId"), request.AssetID, request.NodeID, request.Language, request.Route)
 		if err != nil {
 			failService(c, err)
 			return

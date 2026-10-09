@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"infinite-canvas/backend/internal/app"
@@ -131,6 +132,25 @@ func RegisterEditProjectRoutes(api gin.IRouter, svc *app.Service, host *editrunt
 				return
 			}
 			c.Data(status, "application/json", data)
+			return
+		}
+		if c.Request.Method == http.MethodPost && c.Param("action") == "/transcribe" {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+			var input app.AssistantEditMediaRequest
+			if c.ShouldBindJSON(&input) != nil || input.File == "" {
+				fail(c, 400, app.BadAuthRequest("转写请求无效"))
+				return
+			}
+			policy, available := loadRuntimePolicy(c, svc)
+			if !available || !enforceRateLimit(c, "timeline-ts:"+c.GetString("agentUserId"), policy.Request.TaskCreatePerMinute, time.Minute) {
+				return
+			}
+			task, media, err := svc.AssistantTranscribeEditMedia(c.Request.Context(), c.GetString("agentUserId"), c.Param("canvasId"), c.Param("editId"), input, host)
+			if err != nil {
+				failService(c, err)
+				return
+			}
+			ok(c, gin.H{"taskId": task.ID, "status": task.Status, "stage": task.Stage, "progress": task.Progress, "media": media})
 			return
 		}
 		if c.Request.Method == http.MethodGet && strings.HasPrefix(c.Param("action"), "/exports/") && strings.HasSuffix(c.Param("action"), "/file") {

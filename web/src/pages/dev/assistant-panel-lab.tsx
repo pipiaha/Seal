@@ -42,6 +42,7 @@ function stubController(open: boolean, setOpen: (next: boolean) => void, width: 
     const noop = () => {};
     const asyncNoop = async () => {};
     return {
+        ensureSession: async()=> 'lab-session',
         projectId: '',
         open,
         setOpen,
@@ -66,6 +67,10 @@ function stubController(open: boolean, setOpen: (next: boolean) => void, width: 
         streamed: "",
         toolActivity: [],
         streaming: false,
+        canSupplement: false,
+        instructions: [],
+        instructionError: null,
+        supplement: async () => false,
 		lifecycleNotice: null,
         error: null,
         canRetry: false,
@@ -73,7 +78,7 @@ function stubController(open: boolean, setOpen: (next: boolean) => void, width: 
         handledProposals: new Set<string>(),
         markProposalHandled: noop,
         markProposalDismissed: noop,
-        send: asyncNoop,
+        send: async () => true,
         stop: asyncNoop,
         retryLast: noop,
         dismissError: noop,

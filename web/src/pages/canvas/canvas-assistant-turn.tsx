@@ -5,7 +5,7 @@ import { AIMessageMarkdown } from "@/components/ai/ai-message-markdown";
 import { GenerationToolCard } from "@/components/ai/generation-tool-card";
 import { AssistantToolActivityView } from "./assistant-tool-activity-view";
 
-import { agentAssistantFailureText, type AgentToolCall, type AssistantGenerationProposal, type AssistantTurn, type AssistantWorkflow, type AssistantSkillUse } from "@/services/api/agent-assistant";
+import { agentAssistantFailureText, type AgentToolCall, type AssistantGenerationProposal, type AssistantTurn, type AssistantWorkflow, type AssistantSkillUse, type AssistantImageInfo, type AssistantMedia } from "@/services/api/agent-assistant";
 import { CreatorWorkflow } from './creator-workflow';
 import { assistantChangeSummary, assistantChangedNodeIds, assistantProposalText, assistantUnresolvedFailures, assistantUndoFailureText, assistantVisibleReply } from "./canvas-assistant-copy";
 import { dismissedProposalKey, type AssistantTurnStatus } from "./use-canvas-assistant";
@@ -37,10 +37,12 @@ export const CanvasAssistantReply = memo(function CanvasAssistantReply({ text, i
     );
 });
 
-export function CanvasAssistantUserMessage({ text, selectedCount, requestedSkill }: { text: string; selectedCount: number; requestedSkill?: AssistantSkillUse | null }) {
+export function CanvasAssistantUserMessage({ text, selectedCount, requestedSkill, images = [], media = [] }: { text: string; selectedCount: number; requestedSkill?: AssistantSkillUse | null; images?: AssistantImageInfo[]; media?: AssistantMedia[] }) {
     return (
         <div className="canvas-assistant-user">
             <span style={{ whiteSpace: "pre-wrap" }}>{text}</span>
+            {images.length ? <span className="canvas-assistant-meta">已附 {images.length} 张图片：{images.map(image => image.name).join('、')}</span> : null}
+            {media.length ? <span className="canvas-assistant-meta">已附文件：{media.map(file => file.name).join('、')}</span> : null}
             {requestedSkill ? <span className="canvas-assistant-meta">指定技能：{requestedSkill.displayName || requestedSkill.name}</span> : null}
             {selectedCount > 0 ? <span className="canvas-assistant-meta">带上了已选的 {selectedCount} 个节点</span> : null}
         </div>
@@ -55,7 +57,8 @@ export const CanvasAssistantTurnView = memo(function CanvasAssistantTurnView({ t
 
     return (
         <div className="canvas-assistant-turn">
-            <CanvasAssistantUserMessage text={turn.userText} selectedCount={turn.selectedNodeIds?.length ?? 0} requestedSkill={turn.requestedSkill} />
+            <CanvasAssistantUserMessage text={turn.userText} selectedCount={turn.selectedNodeIds?.length ?? 0} requestedSkill={turn.requestedSkill} images={turn.images} media={turn.media} />
+            {turn.instructions?.map(item => <p className="canvas-assistant-meta" key={item.instructionId}>补充要求：{item.message} · {item.state === 'received' ? '已交给助手' : '未处理，可在下一条消息中继续'}</p>)}
             {turn.toolActivity?.length ? <AssistantToolActivityView items={turn.toolActivity} /> : null}
             {turn.reply ? <CanvasAssistantReply text={turn.reply} /> : null}
             {turn.skillsUsed?.length ? <p className="canvas-assistant-meta">本轮已读取技能：{turn.skillsUsed.map(skill => skill.displayName || skill.name).join('、')}</p> : null}

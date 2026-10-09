@@ -12,6 +12,9 @@ import { workflowJournal } from './workflow-journal.mjs';
 import { createFullControlLoader } from './full-control-loader.mjs';
 import { createHostSettingsManager } from './session-settings.mjs';
 import { createTurnObserver } from './lifecycle-events.mjs';
+import { createContextTools } from './turn-context.mjs';
+import { observeTurnInstruction } from './turn-instructions.mjs';
+import { limitVisualContext } from './visual-input.mjs';
 
 export const TURN_ENTRY_TYPE = 'beeftv.canvas.turn';
 
@@ -32,7 +35,7 @@ function storeClosedError() {
   return error;
 }
 
-export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId, getModelRuntime, getModel, resourceLoader: suppliedResourceLoader, resourceLoaderFactory }) {
+export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId, getModelRuntime, getModel, resourceLoader: suppliedResourceLoader, resourceLoaderFactory, turnBudgetContext }) {
   const sessions = new Map();
   const canvasLocks = new Map();
   let closed = false;
@@ -173,7 +176,9 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
     const identity = sessionActionIdentity({ persistedId, runId });
     turn.workflowJournal = workflowJournal(manager, identity.prefix);
     console.error(`agent-host: 会话 ${canvasId} 的动作身份来源 = ${identity.source}（persistence=${persistence}）`);
-    const tools = buildTools(canvasId, log, generation, turn, identity.prefix);
+    const contextTools = createContextTools({ directory: path.join(canvasSessionDir(canvasId), 'tool-results', canvasKey(persistedId)), manager, turn, generation, turnBudgetContext,
+      visualLimits: { maxImages: Number(process.env.BEEFTV_AGENT_MAX_IMAGES || 0), maxImageBytes: Number(process.env.BEEFTV_AGENT_MAX_IMAGE_BYTES || 0) } });
+    const tools = [...contextTools.wrap([...buildTools(canvasId, log, generation, turn, identity.prefix), contextTools.imageReader]), contextTools.reader];
     const { session } = await createAgentSession({
       cwd,
       agentDir,
@@ -186,6 +191,14 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
       settingsManager: createHostSettingsManager(),
       sessionManager: manager,
     });
+    const prepareRequest = session.agent.prepareRequest;
+    session.agent.prepareRequest = async (request, signal) => {
+      const prepared = await prepareRequest?.(request, signal);
+      const context = prepared?.context || request.context;
+      return { ...prepared, context: { ...context, messages: limitVisualContext(context.messages, {
+        maxImages: Number(process.env.BEEFTV_AGENT_MAX_IMAGES || 0), maxImageBytes: Number(process.env.BEEFTV_AGENT_MAX_IMAGE_BYTES || 0),
+      }) } };
+    };
     return {
       resourceLoader,
       skillRevision: null,
@@ -296,9 +309,11 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
     if (entry) entry.busy = false;
   }
 
-  async function runOwnedPrompt(entry, message, { onEvent, runWithBudget, timeoutMs }) {
+  async function runOwnedPrompt(entry, message, { onEvent, runWithBudget, timeoutMs, images = [] }) {
     const observer = createTurnObserver();
     const unsubscribe = entry.session.subscribe((event) => {
+      const instruction = observeTurnInstruction(entry, event);
+      if (instruction) onEvent({ type: 'instruction', instruction });
       const payload = observer.handle(event);
       if (payload) onEvent(payload);
     });
@@ -311,7 +326,7 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
     let error = null;
     try {
       await runWithBudget(async () => {
-        await entry.session.prompt(message, { expandPromptTemplates: false, source: 'rpc' });
+        await entry.session.prompt(message, { expandPromptTemplates: false, source: 'rpc', images });
       });
       if (!observer.settled) {
         try { await entry.session.waitForIdle(); } catch { /* 仍按未 settle 处理 */ }

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createVisualFrames } from './visual-frames.mjs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -25,6 +26,7 @@ const scenes = createHypitScenes(store, gateway);
 const media = createLibraryMedia(store, gateway);
 const productions = createHypitProductions(store, scenes);
 const hyperframes = createHyperframesScenes(store);
+const visuals = createVisualFrames(store);
 const sameToken = value => typeof value === 'string' && value.length === token.length
   && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(token));
 const server = http.createServer(async (req, res) => {
@@ -36,7 +38,7 @@ const server = http.createServer(async (req, res) => {
       : ['GET', 'HEAD'].includes(req.method) ? {} : JSON.parse((await readBody(req)).toString() || '{}');
     let data;
     if (req.method === 'GET' && url.pathname === '/update/status') {
-      data = { ready: store.busy() + gateway.busy() + productions.busy() + hyperframes.busy() === 0 };
+      data = { ready: store.busy() + gateway.busy() + productions.busy() + hyperframes.busy() + visuals.busy() === 0 };
     } else if (req.method === 'POST' && url.pathname === '/open') {
       const edit = await store.ensure(body.projectId);
       await store.locked(edit.editId, () => initializeProject(store.workDir(edit.editId)));
@@ -52,7 +54,11 @@ const server = http.createServer(async (req, res) => {
       const state = await store.state(editId);
       if (state.projectId !== url.searchParams.get('projectId')) throw failure('edit_scope_mismatch', 'This edit belongs to another project', 403);
       const owned = await gateway.open(editId);
-      if (req.method === 'GET' && action === '') data = state;
+      if (req.method === 'POST' && action === '/vision') {
+        data = await visuals.read(editId, body, owned);
+      }
+      else if (req.method === 'POST' && action === '/media-info') data = await visuals.info(editId, body, owned);
+      else if (req.method === 'GET' && action === '') data = state;
       else if (req.method === 'POST' && action.startsWith('/hypit/')) {
         const command = action.slice('/hypit/'.length);
         if (command === 'open') data = await productions.open(editId);
@@ -116,13 +122,28 @@ const server = http.createServer(async (req, res) => {
       }
       else if (req.method === 'POST' && action === '/read') {
         const file = String(body.file || 'index.html');
-        const response = await store.locked(editId, () => owned.studio.app.request(`/api/projects/${editId}/files/${file.split('/').map(encodeURIComponent).join('/')}`));
-        if (!response.ok) throw failure('file_not_found', 'Project file not found', response.status);
-        data = { editId, revision: (await store.state(editId)).revision, file, content: await response.text(), version: response.headers.get('ETag') };
+        data = await store.locked(editId, async () => {
+          const response = await owned.studio.app.request(`/api/projects/${editId}/files/${file.split('/').map(encodeURIComponent).join('/')}`);
+          if (!response.ok) throw failure('file_not_found', 'Project file not found', response.status);
+          return { editId, revision: (await store.state(editId)).revision, file, content: await response.text(), version: response.headers.get('ETag') };
+        });
       }
       else if (req.method === 'GET' && action === '/context') {
-        const response = await store.locked(editId, () => owned.studio.app.request(`/api/projects/${editId}/selection`));
-        data = { projectId: state.projectId, editId, revision: (await store.state(editId)).revision, selection: await response.json() };
+        data = await store.locked(editId, async () => {
+          const response = await owned.studio.app.request(`/api/projects/${editId}/selection`);
+          if (!response.ok) throw failure('selection_unavailable', 'Selection is unavailable', response.status);
+          await owned.history.flush();
+          const { document } = parseHTML(await fs.readFile(path.join(store.workDir(editId), 'index.html'), 'utf8'));
+          const root = document.querySelector('[data-composition-id]');
+          const clips = [...document.querySelectorAll('.clip')];
+          return { projectId: state.projectId, editId, revision: (await store.state(editId)).revision, selection: await response.json(),
+            overview: { width: Number(root?.getAttribute('data-width')), height: Number(root?.getAttribute('data-height')),
+              duration: Number(root?.getAttribute('data-duration')), clipCount: clips.length,
+              clips: clips.slice(0, 20).map(node => ({ id: node.id, label: (node.getAttribute('data-label') || '').slice(0, 120),
+                start: Number(node.getAttribute('data-start')), duration: Number(node.getAttribute('data-duration')), track: Number(node.getAttribute('data-track-index')) })) },
+            recentChanges: owned.history.list().slice(-5).map(entry => ({ id: entry.id, label: String(entry.label || '').slice(0, 160),
+              who: entry.who, timestamp: entry.timestamp, createdAt: entry.createdAt })) };
+        });
       } else if (req.method === 'POST' && action === '/history') {
         data = await store.locked(editId, async () => {
           await owned.history.flush();
@@ -145,6 +166,7 @@ async function shutdown() {
   await new Promise(resolve => server.close(resolve));
   await productions.close();
   await hyperframes.close();
+  visuals.close();
   await gateway.close();
   process.exit(0);
 }

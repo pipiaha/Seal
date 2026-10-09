@@ -24,6 +24,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $previewBuildWeb 'index.html'))) { t
 if ([IO.Path]::GetFullPath($previewBuildEmbedded) -ne (Join-Path $previewBuildRoot 'backend\cmd\desktop\frontend\dist')) { throw 'Unexpected embedded build directory.' }
 if (Test-Path -LiteralPath $previewBuildEmbedded) { Remove-Item -LiteralPath $previewBuildEmbedded -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $previewBuildEmbedded | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $previewBuildEmbedded '.gitkeep') | Out-Null
 Get-ChildItem -LiteralPath $previewBuildWeb | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $previewBuildEmbedded -Recurse -Force
 }

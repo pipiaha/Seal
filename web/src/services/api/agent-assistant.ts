@@ -14,6 +14,8 @@ export type AssistantUnavailableReason =
     | "host_unreachable";
 
 export type AssistantModelInfo = {
+    maxImages?: number;
+    maxImageBytes?: number;
     id: string;
     channelId: string;
     channelName: string;
@@ -74,8 +76,15 @@ export type AssistantGenerationProposal = {
 };
 
 export type AssistantSkillUse = { id: string; name: string; displayName?: string; version: string; contentHash: string };
+export type AssistantImageInfo = { id: string; name: string; mimeType: 'image/png' | 'image/jpeg'; source?: string };
+export type AssistantImage = AssistantImageInfo & { data: string };
+export type AssistantMedia = { id: string; name: string; kind: 'video' | 'audio' | 'text'; assetId?: string; nodeId?: string; content?: string };
+export type AssistantInstruction = { instructionId: string; message: string; state: 'queued' | 'received' | 'not_processed' | 'failed'; turnId: string };
 export type AssistantWorkflow = { id: string; title: string; goal: string; revision: number; turnId: string; steps: Array<{ id: string; label: string; state: 'pending' | 'waiting' | 'done'; note?: string; taskId?: string; taskKind?: 'asr' | 'generation'; candidateId?: string; fileHash?: string; operationId?: string }> };
 export type AgentTurnEnd = {
+    media?: AssistantMedia[];
+    images?: AssistantImageInfo[];
+    instructions?: AssistantInstruction[];
     toolActivity?: AssistantToolActivity[];
     requestedSkill?: AssistantSkillUse | null;
     workflows?: AssistantWorkflow[];
@@ -94,6 +103,9 @@ export type AgentTurnEnd = {
 };
 
 export type AssistantTurn = {
+    media?: AssistantMedia[];
+    images?: AssistantImageInfo[];
+    instructions?: AssistantInstruction[];
     toolActivity?: AssistantToolActivity[];
     requestedSkill?: AssistantSkillUse | null;
     workflows?: AssistantWorkflow[];
@@ -125,6 +137,7 @@ export type AssistantSessionList = {
 };
 
 export type AssistantHistory = {
+    activeTurn?: { turnId: string; sessionId: string; userText: string; selectedNodeIds: string[]; instructions: AssistantInstruction[] } | null;
     sessionId: string;
     turns: (AssistantTurn & { undone?: boolean })[];
 };
@@ -140,6 +153,10 @@ let uiSessionGeneration = 0;
  */
 export function agentAssistantFailureText(reason: string | undefined, fallback = "创作助手暂时不可用，请稍后再试") {
     switch (reason) {
+        case 'media_input_invalid':
+            return '附件无法发送，请检查文件格式、数量，以及素材是否仍在当前工作区。';
+        case 'image_input_invalid':
+            return '图片未能发送，请检查助手模型是否开启图片引用，以及图片数量和大小限制。';
         case "selected_skill_unavailable":
             return "所选技能已停用、删除或不可用，请在 Skill Hub 核对后重新选择。";
         case "turn_timeout":
@@ -212,7 +229,7 @@ export async function getAssistantHistory(canvasId: string, sessionId?: string):
     if (sessionId) query.set("sessionId", sessionId);
     const data = await http.get<AssistantHistory>(`/assistant/history?${query.toString()}`, await uiSessionConfig());
     if (!data || !Array.isArray(data.turns)) throw new Error("没能读取对话，请重试");
-    return { sessionId: data.sessionId || sessionId || "", turns: data.turns.map((turn) => ({
+    return { ...('activeTurn' in data ? { activeTurn: data.activeTurn } : {}), sessionId: data.sessionId || sessionId || "", turns: data.turns.map((turn) => ({
         ...turn,
         error: turn.error ? agentAssistantFailureText(turn.errorReason ?? undefined, "这一轮没有全部完成，请核对已经落地的改动。") : null,
     })) };
@@ -302,6 +319,8 @@ export type AgentLifecycleEvent = {
 };
 
 export type StreamHandlers = {
+    onInstruction?: (instruction: AssistantInstruction) => void;
+    onTurnStart?: (event: { turnId: string; sessionId: string }) => void;
     onTool?: (event: AgentToolEvent) => void;
     onDelta?: (delta: string) => void;
     onTurnEnd?: (end: AgentTurnEnd) => void;
@@ -326,6 +345,9 @@ export type AgentChatReference = {
 };
 
 export type AgentChatRequest = {
+	continuationProposalId?:string;
+    media?: AssistantMedia[];
+    images?: AssistantImage[];
     selectedSkillId?: string;
     workspaceContext?: EditWorkspaceContext;
     signal?: AbortSignal;
@@ -359,7 +381,7 @@ export async function streamAgentChat(
     handlers: StreamHandlers,
     request: AgentChatRequest = {},
 ): Promise<void> {
-    const { signal, selectedNodeIds = [], references = [], sessionId, workspaceContext, selectedSkillId } = request;
+    const { signal, selectedNodeIds = [], references = [], sessionId, workspaceContext, selectedSkillId, images = [], media = [], continuationProposalId } = request;
     const scope = captureUserScope();
     let token: string;
     try {
@@ -374,6 +396,9 @@ export async function streamAgentChat(
     if (sessionId) body.sessionId = sessionId;
     if (workspaceContext) body.workspaceContext = workspaceContext;
     if (selectedSkillId) body.selectedSkillId = selectedSkillId;
+    if (images.length) body.images = images;
+    if (media.length) body.media = media;
+    if (continuationProposalId) body.continuationProposalId=continuationProposalId;
     const response = await fetch(`${apiBaseURL}/assistant/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Beeftv-Ui-Session": token },
@@ -433,6 +458,14 @@ async function readAgentTurnStream(
         }
         if (payload.type === "text_delta" && typeof payload.delta === "string") {
             handlers.onDelta?.(payload.delta);
+            return;
+        }
+        if (payload.type === 'turn_start' && typeof payload.turnId === 'string' && typeof payload.sessionId === 'string') {
+            handlers.onTurnStart?.({ turnId: payload.turnId, sessionId: payload.sessionId });
+            return;
+        }
+        if (payload.type === 'instruction' && payload.instruction && typeof payload.instruction === 'object') {
+            handlers.onInstruction?.(payload.instruction as AssistantInstruction);
             return;
         }
         if (payload.type === "tool") {
@@ -501,4 +534,8 @@ export async function cancelAgentChat(canvasId: string): Promise<void> {
     if (!response.ok || businessFailed) {
         throw new Error(agentAssistantFailureText(payload?.reason, "停止失败，请再试一次"));
     }
+}
+
+export async function steerAgentChat(canvasId: string, sessionId: string, turnId: string, message: string, instructionId: string) {
+    return http.post<AssistantInstruction>('/assistant/steer', { canvasId, sessionId, turnId, message, instructionId }, await uiSessionConfig());
 }

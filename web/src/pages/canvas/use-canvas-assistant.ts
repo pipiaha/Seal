@@ -11,6 +11,7 @@ import {
     AgentTurnFailedError,
     AgentChatNotAdmittedError,
     cancelAgentChat,
+    steerAgentChat,
     createAssistantSession,
     getAgentHostStatus,
     getAssistantHistory,
@@ -25,6 +26,9 @@ import {
     type AssistantSkillUse,
     type AssistantUndoFailure,
     type AssistantToolActivity,
+    type AssistantInstruction,
+    type AssistantImage,
+    type AssistantMedia,
 } from "@/services/api/agent-assistant";
 import { assistantChangedNodeIds, assistantLifecycleText } from "./canvas-assistant-copy";
 import { waitForAssistant } from "./assistant-readiness";
@@ -70,6 +74,12 @@ export type AssistantTurnStatus = {
 };
 
 type CanvasRun = {
+    activeTurnId: string | null;
+    waitingForTurn: boolean;
+    instructionBusy: boolean;
+    instructionError: string | null;
+    instructions: AssistantInstruction[];
+    pendingInstruction: { instructionId: string; turnId: string; message: string } | null;
     sessionId: string | null;
     sessions: AssistantSessionSummary[];
     turns: AssistantTurn[];
@@ -88,11 +98,17 @@ type CanvasRun = {
     lifecycleNotice: string | null;
     controller: AbortController | null;
     error: string | null;
-    lastSent: { text: string; selectedNodeIds: string[]; references: AgentChatReference[]; selectedSkill?: AssistantSkillUse } | null;
+    lastSent: { text: string; selectedNodeIds: string[]; references: AgentChatReference[]; selectedSkill?: AssistantSkillUse; images?: AssistantImage[]; media?: AssistantMedia[]; continuationProposalId?:string } | null;
     turnStatus: Record<string, AssistantTurnStatus>;
 };
 
 const createRun = (): CanvasRun => ({
+    activeTurnId: null,
+    waitingForTurn: false,
+    instructionBusy: false,
+    instructionError: null,
+    instructions: [],
+    pendingInstruction: null,
     sessionId: null,
     sessions: [],
     turns: [],
@@ -225,12 +241,42 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
             const nextSession = sessionId || history.sessionId || sessionList.currentSessionId || null;
             const known = new Set(history.turns.map((turn) => turn.turnId));
             const recent = nextSession === run.sessionId ? run.turns.filter((turn) => !known.has(turn.turnId)) : [];
-            if (run.error && findRecoveredAssistantTurn(run.recovery, history)) {
+            const recovered = findRecoveredAssistantTurn(run.recovery, history);
+            if (run.error && recovered) {
                 run.pendingUserText = null;
                 run.pendingSelectedNodeIds = [];
                 run.pendingRequestedSkill = null;
                 run.error = null;
                 run.recovery = null;
+            }
+            if (recovered) {
+                run.waitingForTurn = false;
+                run.activeTurnId = null;
+                run.recovery = null;
+                run.pendingUserText = null;
+                run.instructions = recovered.instructions || [];
+                onCanvasChangedRef.current?.(targetCanvas, assistantChangedNodeIds(recovered.change));
+            }
+            if (history.activeTurn && !run.streaming) {
+                run.dispatched = true;
+                run.waitingForTurn = true;
+                run.activeTurnId = history.activeTurn.turnId;
+                run.pendingUserText = history.activeTurn.userText;
+                run.pendingSelectedNodeIds = history.activeTurn.selectedNodeIds;
+                run.instructions = history.activeTurn.instructions || [];
+                run.recovery = { sessionId: history.sessionId, turnId: history.activeTurn.turnId,
+                    knownTurnIds: history.turns.map(turn => turn.turnId), text: history.activeTurn.userText,
+                    selectedNodeIds: history.activeTurn.selectedNodeIds };
+            }
+            if (!history.activeTurn && run.waitingForTurn && history.turns.some(turn => turn.turnId === run.activeTurnId)) {
+                run.waitingForTurn = false;
+                run.activeTurnId = null;
+                run.pendingUserText = null;
+                run.error = null;
+            }
+            if ('activeTurn' in history && !history.activeTurn && !run.streaming) {
+                run.waitingForTurn = false;
+                run.activeTurnId = null;
             }
             run.sessions = sessionList.sessions;
             run.sessionId = nextSession;
@@ -249,6 +295,13 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         }
     }, [rerenderIfActive, runFor]);
 
+    const waitingForTurn = runFor(canvasId).waitingForTurn;
+    useEffect(() => {
+        if (!open || !waitingForTurn) return;
+        const timer = window.setInterval(() => { void loadHistory(canvasId); }, 2500);
+        return () => window.clearInterval(timer);
+    }, [open, waitingForTurn, canvasId, loadHistory]);
+
     // 打开面板或切画布时补齐这条画布的历史；已经载入过就不重复拉。
     useEffect(() => {
         if (!open) return;
@@ -257,7 +310,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         void loadHistory(canvasId);
     }, [canvasId, loadHistory, open, runFor, status?.available]);
 
-    const send = useCallback(async (text: string, selectedNodeIds: string[], references: AgentChatReference[] = [], selectedSkill?: AssistantSkillUse) => {
+    const send = useCallback(async (text: string, selectedNodeIds: string[], references: AgentChatReference[] = [], selectedSkill?: AssistantSkillUse, images: AssistantImage[] = [], media: AssistantMedia[] = [], options:{continuationProposalId?:string}={}) => {
         const message = text.trim();
         if (!message) return;
         // 发送时冻结归属：此后即使用户切到别的画布，结果也只写回这条记录。
@@ -266,7 +319,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         const referenceSnapshot = references.map((reference) => ({ ...reference }));
         const skillSelection = selectedSkill ? { ...selectedSkill } : undefined;
         const run = runFor(targetCanvas);
-        if (run.streaming || run.sessionBusy) return;
+        if (run.streaming || run.waitingForTurn || run.sessionBusy) return;
+        run.activeTurnId = null;
+        run.instructions = [];
+        run.instructionError = null;
         const controller = new AbortController();
         run.pendingUserText = message;
         run.pendingSelectedNodeIds = selectedSnapshot;
@@ -279,7 +335,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         run.error = null;
         run.dispatched = false;
         run.recovery = null;
-        run.lastSent = { text: message, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, selectedSkill: skillSelection };
+        run.lastSent = { text: message, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, selectedSkill: skillSelection, images, media, continuationProposalId:options.continuationProposalId };
         rerenderIfActive(targetCanvas);
         try {
             const workspaceContext = await workspaceContextRef.current?.();
@@ -291,11 +347,23 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
             controller.signal.throwIfAborted();
             const ready = await waitForAssistant(controller.signal);
             setStatus(ready);
+            if (images.length && (!ready.model?.maxImages || images.length > ready.model.maxImages)) throw new Error('当前助手模型未开启图片输入，或图片数量超出模型限制。请在模型配置中开启图片引用，或切换支持视觉的模型。');
+            if (images.some(image => image.data.length * 3 / 4 > (ready.model?.maxImageBytes || 0))) throw new Error('图片超过当前助手模型的输入大小限制，请缩小图片或调整模型配置。');
             if (!run.historyLoaded && !await loadHistory(targetCanvas)) throw new Error("对话还没读回来，请重新读取后再发送");
             controller.signal.throwIfAborted();
             run.recovery = { sessionId: run.sessionId, knownTurnIds: run.turns.map((turn) => turn.turnId), text: message, selectedNodeIds: selectedSnapshot };
             run.dispatched = true;
             await streamAgentChat(targetCanvas, message, {
+                onInstruction: (instruction) => {
+                    run.instructions = [...run.instructions.filter(item => item.instructionId !== instruction.instructionId), instruction];
+                    rerenderIfActive(targetCanvas);
+                },
+                onTurnStart: (start) => {
+                    run.activeTurnId = start.turnId;
+                    run.sessionId = start.sessionId;
+                    if (run.recovery) { run.recovery.sessionId = start.sessionId; run.recovery.turnId = start.turnId; }
+                    rerenderIfActive(targetCanvas);
+                },
                 onTool: (event) => {
                     const current = runFor(targetCanvas);
                     const next = updateToolActivity(current.toolActivity, event);
@@ -318,6 +386,9 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     flushStreamRender(targetCanvas);
                     const current = runFor(targetCanvas);
                     const turn: AssistantTurn = {
+                        media: end.media || media.map(({ content: _content, ...metadata }) => metadata),
+                        images: end.images || images.map(({ data: _data, ...metadata }) => metadata),
+                        instructions: end.instructions || [],
                         turnId: end.turnId || `${targetCanvas}:${Date.now()}`,
                         userText: message,
                         selectedNodeIds: selectedSnapshot,
@@ -337,6 +408,9 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     };
                     current.turns = [...current.turns, turn];
                     current.recovery = null;
+                    current.activeTurnId = null;
+                    current.waitingForTurn = false;
+                    current.instructions = end.instructions || [];
                     current.historyError = null;
                     current.pendingUserText = null;
                     current.pendingSelectedNodeIds = [];
@@ -347,14 +421,14 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     onCanvasChangedRef.current?.(targetCanvas, assistantChangedNodeIds(turn.change));
                     rerenderIfActive(targetCanvas);
                 },
-            }, { signal: controller.signal, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, sessionId: run.sessionId ?? undefined, workspaceContext, selectedSkillId: skillSelection?.id });
+            }, { signal: controller.signal, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, sessionId: run.sessionId ?? undefined, workspaceContext, selectedSkillId: skillSelection?.id, images, media,continuationProposalId:options.continuationProposalId });
         } catch (streamError) {
             flushStreamRender(targetCanvas);
             if (streamError instanceof AgentTurnFailedError) {
                 // onTurnEnd 已保存真实失败及画布变化，不再额外显示「结果未知」或触发重放。
                 runFor(targetCanvas).error = null;
                 rerenderIfActive(targetCanvas);
-                return;
+                return true;
             }
             // 用户点「停止」会以 AbortError 结束这次请求：这是预期结果，不当成失败。
             const aborted = streamError instanceof DOMException && streamError.name === "AbortError";
@@ -373,9 +447,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
             current.toolActivity = settleToolActivity(current.toolActivity);
             current.lifecycleNotice = null;
             current.error = aborted ? null : current.dispatched
-                ? "这一轮未能确认完成，可能已有改动。请先查看画布并重新读取对话，再决定下一步。"
+                ? "回复连接中断，正在核对执行记录。已完成的改动会保留，请不要重复提交生成。"
                 : streamError instanceof Error ? streamError.message : String(streamError);
             if (current.dispatched) {
+                current.waitingForTurn = Boolean(current.recovery);
                 onCanvasChangedRef.current?.(targetCanvas, []);
                 void loadHistory(targetCanvas);
             }
@@ -394,18 +469,47 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                 rerenderIfActive(targetCanvas);
             }).catch(() => { /* 会话列表读取失败不覆盖本轮结果；重新读取入口仍可用。 */ });
         }
+        return run.dispatched;
     }, [flushStreamRender, loadHistory, rerenderIfActive, runFor, scheduleStreamRender]);
 
     // 停止只作用于当前正在查看的画布，不会取消别的画布。
     const stop = useCallback(async () => {
         const targetCanvas = activeCanvasRef.current;
         const run = runFor(targetCanvas);
-        run.controller?.abort();
-        if (!run.dispatched) return;
+        if (!run.dispatched) { run.controller?.abort(); return; }
         try {
             await cancelAgentChat(targetCanvas);
+            run.controller?.abort();
+            run.waitingForTurn = Boolean(run.recovery || run.activeTurnId);
+            void loadHistory(targetCanvas);
         } catch (cancelError) {
             run.error = cancelError instanceof Error ? cancelError.message : String(cancelError);
+            rerenderIfActive(targetCanvas);
+        }
+    }, [loadHistory, rerenderIfActive, runFor]);
+
+    const supplement = useCallback(async (text: string) => {
+        const targetCanvas = activeCanvasRef.current;
+        const run = runFor(targetCanvas);
+        if (!run.activeTurnId || !run.sessionId || run.instructionBusy) return false;
+        run.instructionBusy = true;
+        run.instructionError = null;
+        rerenderIfActive(targetCanvas);
+        try {
+            const pending = run.pendingInstruction?.turnId === run.activeTurnId && run.pendingInstruction.message === text
+                ? run.pendingInstruction : { instructionId: crypto.randomUUID(), turnId: run.activeTurnId, message: text };
+            run.pendingInstruction = pending;
+            const instruction = await steerAgentChat(targetCanvas, run.sessionId, pending.turnId, text, pending.instructionId);
+            const observed = run.instructions.find(item => item.instructionId === instruction.instructionId);
+            run.instructions = [...run.instructions.filter(item => item.instructionId !== instruction.instructionId), observed?.state === 'received' ? observed : instruction];
+            if (instruction.state === 'failed') throw new Error('instruction_failed');
+            run.pendingInstruction = null;
+            return true;
+        } catch {
+            run.instructionError = '补充要求未能确认送达，请重新读取对话后核对；这条文字仍保留在输入框。';
+            return false;
+        } finally {
+            run.instructionBusy = false;
             rerenderIfActive(targetCanvas);
         }
     }, [rerenderIfActive, runFor]);
@@ -413,7 +517,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
     const retryLast = useCallback(() => {
         const run = runFor(activeCanvasRef.current);
         if (!run.lastSent || run.dispatched) return;
-        void send(run.lastSent.text, run.lastSent.selectedNodeIds, run.lastSent.references, run.lastSent.selectedSkill);
+        void send(run.lastSent.text, run.lastSent.selectedNodeIds, run.lastSent.references, run.lastSent.selectedSkill, run.lastSent.images, run.lastSent.media,{continuationProposalId:run.lastSent.continuationProposalId});
     }, [runFor, send]);
 
     const dismissError = useCallback(() => {
@@ -428,7 +532,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
     const startNewSession = useCallback(async () => {
         const targetCanvas = activeCanvasRef.current;
         const run = runFor(targetCanvas);
-        if (run.streaming || run.sessionBusy) return;
+        if (run.streaming || run.waitingForTurn || run.sessionBusy) return;
         run.sessionBusy = true;
         ++run.historyRequest;
         rerenderIfActive(targetCanvas);
@@ -456,7 +560,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
     const activateSession = useCallback(async (sessionId: string) => {
         const targetCanvas = activeCanvasRef.current;
         const run = runFor(targetCanvas);
-        if (run.streaming || run.sessionBusy) return;
+        if (run.streaming || run.waitingForTurn || run.sessionBusy) return;
         run.sessionBusy = true;
         ++run.historyRequest;
         rerenderIfActive(targetCanvas);
@@ -528,7 +632,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         setWidth,
         status,
         statusBusy,
-        modelBusy: statusBusy || [...runsRef.current.values()].some((item) => item.streaming || item.sessionBusy),
+        modelBusy: statusBusy || [...runsRef.current.values()].some((item) => item.streaming || item.waitingForTurn || item.sessionBusy),
         sessions: run.sessions,
         sessionId: run.sessionId,
         turns: run.turns,
@@ -536,12 +640,17 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         historyError: run.historyError,
         sessionBusy: run.sessionBusy,
         reloadHistory: () => loadHistory(canvasId),
+        ensureSession: async () => { const current=runFor(canvasId);if(!current.historyLoaded && !await loadHistory(canvasId)) throw new Error('无法读取当前对话');if(!current.sessionId) await startNewSession();if(!current.sessionId) throw new Error('无法创建对话');return current.sessionId; },
         pendingUserText: run.pendingUserText,
         pendingSelectedNodeIds: run.pendingSelectedNodeIds,
         pendingRequestedSkill: run.pendingRequestedSkill,
         streamed: run.streamed,
         toolActivity: run.toolActivity,
-        streaming: run.streaming,
+        streaming: run.streaming || run.waitingForTurn,
+        canSupplement: Boolean(run.activeTurnId) && !run.instructionBusy,
+        instructions: run.instructions,
+        instructionError: run.instructionError,
+        supplement,
         lifecycleNotice: run.lifecycleNotice,
         error: run.error,
         canRetry: Boolean(run.lastSent) && !run.dispatched,

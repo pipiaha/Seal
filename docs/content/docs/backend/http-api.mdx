@@ -77,6 +77,14 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 ### 助手制作扩充
 
+`POST /assistant/chat` 支持 `images: [{id,name,mimeType,data,source?}]`；`data` 是 PNG/JPEG 的 Base64，不能用文件路径或素材编号替代图片内容。图片是用户提供的观察，不增加文件或工具授权。后端在接纳回合前校验实际图片格式、像素、数量和大小；失败返回 `image_input_invalid`。产品上限为 8 张、合计 12 MiB，单图及数量还受所选模型 `capabilityConfig.text.references.maxImages/maxImageBytes` 限制。配置默认不声明视觉能力，需明确开启；状态接口的 `model.maxImages/maxImageBytes` 返回当前有效限制，配置变化会更新宿主。
+
+运行端通过官方 pi `prompt(...,{images})` 发送附件，通过官方供应商适配器转换 OpenAI Chat、Responses 和 Anthropic 图片内容。官方会话保存真实图片，回合历史只返回附件名称、来源等元数据。请求投影保留最新图片并限制整个请求的图片总数，不修改保存的会话；旧附件可通过当前会话范围内的 `conversation_image_read` 重新读取。附件不能在运行中补充指令时追加，需在下一轮发送。
+
+剪辑页的“附上当前画面”读取播放位置，“附上选中片段”读取选中片段中点的合成画面；`@` 工程图片/视频解析成原素材画面，音频继续走转写。`POST /edit-projects/:canvasId/edits/:editId/vision` 接受 `{time?,clipIds?,file?,expectedRevision?}`。运行端验证工程范围、素材路径及片段时间，冻结工程快照后用钉选的 HyperFrames CLI 读取合成画面，媒体解码走随软件打包的 FFmpeg。返回 `{editId,revision,images:[{mimeType,data,time,file}]}`。截图临时目录完成后清理，不写入剪辑轨道或导出结果。
+
+Agent 的 `edit_view` 复用这个读取入口：支持指定时间、当前选区或工程内素材，返回真实图片及时间/版本信息。工具返回图片也校验模型限制；视觉能力关闭时明确报错，不能将“读到工程代码”当作“看到画面”。
+
 以下 POST 均在 `/assistant/projects/:projectId` 下，要求受信任的桌面界面或有效的当前工程宿主轮次；外部客户端不能借用宿主或 UI 身份。
 
 | 路径 | 合同 |
@@ -126,16 +134,79 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 内置创作助手的浏览器侧只使用同源代理：
 
+`POST /assistant/chat` 可带 `images: [{id,name,mimeType,data,source?}]` 与 `media: [{id,name,kind,assetId?,nodeId?,content?}]`。
+图片为 PNG/JPEG base64，需模型开启视觉并满足图片大小/数量限制。`media.kind` 为 `video/audio/text`；音视频须选择所属且在本轮已验证的资产，或当前画布节点；文字只支持 UTF-8 常见文字/字幕文件，最多 16000 字符/个、64000 字符/轮。元信息由后端校验并规范化。
+历史中的 `images/media` 不重复保存像素和文字正文，官方会话日志保留实际 SDK 输入。当前运行端原生支持文字与图片，视频通过真实抽帧及 ASR，音频通过 ASR；不代表原生视频/音乐理解。
+
+| 多媒体端点 | 说明 |
+| --- | --- |
+| `POST /assistant/projects/:projectId/media/read` | `{assetId? 或 nodeId?, frames?, times?, count?}`；读取真实时长、尺寸与音轨；视觉模型可抽取真实 JPEG，默认 3 个时间点，受模型图片数量限制 |
+| `POST /assistant/projects/:projectId/media/transcribe` | `{assetId? 或 nodeId?, language?, route?}`；创建或复用持久 ASR 任务，返回 `taskId/status/stage/progress`；不把开始任务当转写成功 |
+| `POST /assistant/projects/:projectId/media/transcription` | `{taskId}`；查询所属工程的真实任务与转写结果，时间为原素材时间 |
+| `POST /edit-projects/:projectId/edits/:editId/vision` | `{file?, time?, times?, clipIds?, count?, expectedRevision?}`；有版本保护的真实画面读取。`times` 仅用于视频文件原素材时间；`time` 用于工程合成画面；片段选区使用中间时刻 |
+| `POST /edit-projects/:projectId/edits/:editId/media-info` | `{file, expectedRevision?}`；当前工程真实音视频信息和 `placements`（入点、速度、变速曲线） |
+| `POST /edit-projects/:projectId/edits/:editId/transcribe` | `{file, expectedRevision?, language?, route?}`；校验已固定的工程资产引用和原文件哈希，转写所属原资源，返回持久任务及原素材到时间线的位置信息 |
+
+以上端点沿用可信本机界面/开放助手回合与所属工程检查。抽样仅证明看过返回的时间点；ASR 仅转写讲话。完整范围与验证见 `docs/refactor/assistant-multimodal-audit.md`。
+
+### 助手生成权限与结果续接
+
+输入框的“请求批准 / 完全允许”按用户、工程和官方会话 `sessionId` 保存；新对话默认 `ask`。
+这里只管理助手提交的图片、视频和配音生成，不扩大素材读取范围或授予脚本执行能力。
+
+| 端点 | 合同 |
+| --- | --- |
+| `POST /assistant/projects/:projectId/permissions/read` | `{sessionId}`，返回 `{mode: "ask" 或 "allow"}` |
+| `POST /assistant/projects/:projectId/permissions/write` | `{sessionId, mode}`；只能由可信本机界面修改 |
+| `POST /assistant/projects/:projectId/permissions/stop` | `{sessionId}`；持久关闭这条对话尚未续接方案的自动制作/续接，权限模式不变 |
+| `POST /assistant/projects/:projectId/permissions/resume` | `{sessionId}`；界面在用户主动发起下一轮前恢复允许新方案，保留旧已停止方案的状态 |
+| `POST /assistant/projects/:projectId/media/propose` | `{operationId, kind, prompt, model?, sessionId?}`；方案包含 `sessionId/decision/autoContinue/continuationTurnId`；宿主注入真实会话标识 |
+| `POST /assistant/projects/:projectId/media/proposals` | 返回所属工程的方案，界面只展示当前对话与旧无会话方案 |
+| `POST /assistant/projects/:projectId/media/accept/:proposalId` | 使用现有任务创建入参并附加 `automatic`；手动批准为 `false`，自动提交为 `true`。后台校验所保存模式为 `allow`、方案未停止或拒绝、模型配置与方案一致；沿用稳定任务回执 |
+| `POST /assistant/projects/:projectId/media/reject/:proposalId` | 拒绝尚未开始提交的方案；拒绝与批准通过持久决定互斥 |
+| `POST /assistant/projects/:projectId/media/task` | `{taskId}`；读取所属方案任务、产物物化状态和实际素材 ID |
+
+停止标记也持久保存；停止之后晚到的方案不能因刷新而自行恢复生成。
+宿主凭据不能调用 `permissions/*`、`accept/*` 或 `reject/*`，Agent 无法给自己授权。
+审批失败、配置变化、结果未准备好均不能静默放行。`ask` 下明确点击批准后，界面也会继续跟踪实际任务结果。
+
+`POST /assistant/chat` 的自动续接携带原 `sessionId` 和 `continuationProposalId`。后端校验原方案、真实终态和 `READY` 产物，
+将实际产物写入新回合授权范围，并原子登记 `continuationTurnId`；同一结果不能重复受理，拒绝/失败结果可不带素材续接。
+登记代表回合已受理，不能当成助手已成功完成后续剪辑。断流或宿主不可达时沿用现有历史读取与继续执行入口，不能自动重放未知结果。
+
+自动提交与续接由打开的助手界面协调；软件关闭时生成任务保留，重新打开原对话可继续处理尚未受理的结果。
+停止先禁用自动续接、停止助手，再尝试取消正在排队/执行的生成任务；已经提交到供应商的调用以任务系统的取消能力为准。
+
 | 端点 | 说明 |
 | --- | --- |
 | `GET /assistant/status` | 免身份的宿主状态查询（不含任何凭据）；未就绪时返回明确原因而不是空回复 |
 | `POST /assistant/ui-session` | 签发短期限 UI 会话凭据；需本机同源，并且能出示 owner 凭据（或显式本地引导开关） |
 | `POST /assistant/chat` | NDJSON 流式对话：`text_delta` 正文、`lifecycle` 整理/重试、`tool` 执行进度 + 一次 `turn_end` 结算；`tool` 的 `phase` 为 `start/update/end`，仅传 `toolCallId/tool` 与结束时的 `isError`，不传参数和结果；结算与历史包含 `toolActivity`，未结束调用记为 `interrupted`。可带 `references: [{kind,id}]` 追加已校验的素材/画布引用；宿主凭据与模型密钥由后端注入，页面不接触 |
 | `POST /assistant/cancel` | 取消指定画布正在进行的回合 |
+| `POST /assistant/steer` | `{canvasId,sessionId,turnId,instructionId,message}`：追加当前回合要求；Go 校验本人尚未结算的回合，宿主校验当前会话与正在执行的轮次，使用官方 pi 指令队列。相同编号与文本重试不重复入队；不同文本复用编号拒绝。素材范围和技能版本继续沿用本轮快照 |
 | `GET/PUT /assistant/host/config`、`POST /assistant/host/start|stop` | 宿主生命周期：需 owner 凭据 + 本机同源；启动命令只取本机配置，绝不接受请求体传入的可执行命令 |
 
 按轮撤销不依赖浏览器流或宿主的最后一条消息：轮前文档由后端在转发前落盘，变更摘要由该轮自己的写入回执重建，
 因此浏览器断流（没有 `turn_end`）、用户取消或后端在回合中途重启之后，已经落地的助手写入仍然可以撤销。
+
+### 上下文、执行中补充与恢复
+
+每轮由 Go 注入当前工程的可信概览：画布名称、版本、对象数量和选区概览，不携带图片正文、完整提示词或数据 URL。
+剪辑上下文包含当前工程与版本、选区、画面尺寸、时长、有限片段概览和最近五项原生修改记录；时间线、字幕和场景正文按需读取。
+客户端提供的概览不能替代后端数据。模型还会获得最近三轮的有限操作回执和任务引用。
+
+超过 12000 字符的工具文本保存到该官方会话的私有 `tool-results` 目录，模型先看到结果编号、任务/候选等身份与前 1600 字符预览。
+`tool_result_read` 按字符偏移读取最多 6000 字符，或搜索并读取命中附近内容；原始文件不截断，结果编号仅在所属会话可读。
+页面和模型不能指定任意文件路径。分页读取计入本轮工具预算；结果是历史快照，不能作为当前工程版本。
+
+流开头的 `turn_start` 给出 `turnId/sessionId`。补充指令状态为 `queued`（等待工具边界）或 `received`（已交给模型），通过 `instruction` 事件实时更新。
+`received` 不代表已按要求修改成功。结束和历史中的 `instructions` 保留原文与状态；停止或退出前尚未处理的指令显示 `not_processed`，清空官方队列，避免进入下一回合。
+执行中仅补充当前任务要求；新增素材授权或切换技能需要另发一轮。
+
+`GET /assistant/history` 返回 `activeTurn` 或 `null`。断流、停止后与页面重开时，界面读取活动回合并追踪最终记录，不自动重放 `chat`。
+每次工具开始和完成写入同一官方 SessionManager 的检查点，重开后可恢复已完成操作和任务/候选引用；不把缺少完成记录的调用判为成功。
+恢复制作仍需查询真实任务和工程历史，沿用现有操作回执、生成步骤身份和候选重复入轨保护；已受理的外部生成是否完成由原任务状态决定。
+剪辑读取正文和版本在同一工程锁内完成。人工修改后，冲突写入仍拒绝；只有明确重读当前内容后，后续修改才使用新版本。
 宿主对模型请求与工具步骤各自有单轮上限（`BEEFTV_AGENT_MAX_REQUESTS_PER_TURN`、
 `BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN`），按轮独立计数、下一轮从零开始；总预算
 `BEEFTV_AGENT_TOTAL_REQUEST_BUDGET` 默认关闭，只有显式配置才启用。

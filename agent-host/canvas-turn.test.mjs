@@ -103,7 +103,7 @@ describe("付费生成提议", () => {
 
     test("系统提示词必须禁止宣称已生成，并指向提议工具", () => {
         expect(SYSTEM_PROMPT).toContain("canvas_generation_propose");
-        expect(SYSTEM_PROMPT).toContain("你不能生成图片或视频");
+        expect(SYSTEM_PROMPT).toContain("不能绕过生成提议直接调用付费模型");
     });
 
     test("系统提示词用 content 改可编辑提示词，未改字段不要提交", () => {

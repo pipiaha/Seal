@@ -20,3 +20,8 @@ test("a recovered failed receipt retains its business failure", () => {
     const failed = { ...turn("new"), error: "部分完成" };
     expect(findRecoveredAssistantTurn(pending, history([failed]))?.error).toBe("部分完成");
 });
+
+test('an admitted turn identity disambiguates identical messages after reconnect', () => {
+    expect(findRecoveredAssistantTurn({ ...pending, turnId: 'target' }, history([turn('other'), turn('target')]))?.turnId).toBe('target');
+    expect(findRecoveredAssistantTurn({ ...pending, turnId: 'target' }, history([turn('other')]))).toBeUndefined();
+});

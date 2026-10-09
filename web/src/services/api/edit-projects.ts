@@ -30,7 +30,14 @@ export type EditWorkspaceContext = {
     editId: string;
     revision: number;
     selection: unknown;
+    overview?: { width: number; height: number; duration: number; clipCount: number; clips: unknown[] };
+    recentChanges?: Array<{ id: string; label: string; who?: { kind: string; name: string } }>;
 };
+
+export type EditVisualFrame = { mimeType: 'image/jpeg'; data: string; time: number; file: string };
+export function readEditVisual(projectId: string, editId: string, input: { file?: string; time?: number; clipIds?: string[]; expectedRevision?: number }, expectedScope?: CapturedUserScope) {
+    return http.post<{ editId: string; revision: number; images: EditVisualFrame[] }>(`/edit-projects/${encodeURIComponent(projectId)}/edits/${encodeURIComponent(editId)}/vision`, input, { expectedScope, timeout: 120_000 });
+}
 
 export function openEditProject(projectId: string) {
     return http.post<EditLaunch>(`/edit-projects/${encodeURIComponent(projectId)}/open`, { parentOrigin: window.location.origin, theme: useThemeStore.getState().theme }, { timeout: 45_000 });

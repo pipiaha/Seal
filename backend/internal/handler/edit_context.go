@@ -9,11 +9,13 @@ import (
 )
 
 type editWorkspaceContext struct {
-	Mode      string          `json:"mode"`
-	ProjectID string          `json:"projectId"`
-	EditID    string          `json:"editId"`
-	Revision  int64           `json:"revision"`
-	Selection json.RawMessage `json:"selection"`
+	Mode          string          `json:"mode"`
+	ProjectID     string          `json:"projectId"`
+	EditID        string          `json:"editId"`
+	Revision      int64           `json:"revision"`
+	Selection     json.RawMessage `json:"selection"`
+	Overview      json.RawMessage `json:"overview,omitempty"`
+	RecentChanges json.RawMessage `json:"recentChanges,omitempty"`
 }
 
 func validateEditWorkspaceContext(c *gin.Context, canvasID string, requested *editWorkspaceContext) (*editWorkspaceContext, bool) {

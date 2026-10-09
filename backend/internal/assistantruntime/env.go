@@ -30,6 +30,8 @@ func (h *Host) buildEnv(provider assistant.Provider, pin childPin) []string {
 	set("BEEFTV_AGENT_HOST_TOKEN", h.hostToken())
 	set("BEEFTV_AGENT_DESKTOP_TOKEN", pin.DesktopTok)
 	set("BEEFTV_AGENT_API_KEY", provider.APIKey)
+	set("BEEFTV_AGENT_MAX_IMAGES", strconv.Itoa(provider.MaxImages))
+	set("BEEFTV_AGENT_MAX_IMAGE_BYTES", strconv.Itoa(provider.MaxImageBytes))
 	if pin.Port > 0 {
 		set("BEEFTV_AGENT_PORT", strconv.Itoa(pin.Port))
 	} else {

@@ -6,7 +6,11 @@ import { CanvasAssistantHistory } from "./canvas-assistant-history";
 import { AssistantToolActivityView } from "./assistant-tool-activity-view";
 
 import { AppDrawer } from "@/components/ui/product/app-drawer";
-import { referencedAssetIdsInPrompt, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { referencedAssetIdsInPrompt, buildAssetMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { useAssetStore } from '@/stores/use-asset-store';
+import { assistantReferenceImages, prepareAssistantImage, ASSISTANT_IMAGE_LIMIT } from '@/services/assistant-images';
+import type { AssistantImage, AssistantMedia } from '@/services/api/agent-assistant';
+import { assistantFileKind, prepareAssistantMedia, assistantReferencedMedia } from '@/services/assistant-media';
 import type { AssistantGenerationProposal } from "@/services/api/agent-assistant";
 import { ASSISTANT_STARTER_PROMPTS, assistantStatusNotice } from "./canvas-assistant-copy";
 import { CanvasAssistantComposer } from "./canvas-assistant-composer";
@@ -20,6 +24,8 @@ import type { AssistantTurn, AssistantWorkflow } from '@/services/api/agent-assi
 import type { HubSkill } from '@/services/api/skill-hub';
 
 type Props = {
+    captureVisual?: (target: 'preview' | 'selection') => Promise<AssistantImage[]>;
+    resolveVisualReferences?: (text: string) => Promise<AssistantImage[]>;
     assistant: CanvasAssistantController;
     canvasTitle: string;
     dockable: boolean;
@@ -39,7 +45,7 @@ type Props = {
 
 export function CanvasAssistantSidebar(props: Props) {
     const { assistant, canvasTitle, dockable, readOnly, selectedNodeIds, references, onLocateNodes, onRunProposal, onOpenModelSettings } = props;
-    const mediaActions = useCreatorMediaActions(assistant.projectId, assistant.markProposalHandled);
+    const mediaActions = useCreatorMediaActions(assistant,readOnly);
     const callbacksRef = useRef({ onLocateNodes, onRunProposal });
     callbacksRef.current = { onLocateNodes, onRunProposal };
     const locateNodes = useCallback((ids: string[]) => callbacksRef.current.onLocateNodes(ids), []);
@@ -68,6 +74,51 @@ export function CanvasAssistantSidebar(props: Props) {
     const proposalFeedback = useMemo(() => ({ ...props.proposalFeedback, ...mediaActions.feedback }), [props.proposalFeedback, mediaActions.feedback]);
     const undoTurn = useCallback((turnId: string) => { void assistant.undoTurn(turnId); }, [assistant.undoTurn]);
     const [draft, setDraft] = useState("");
+    const [images, setImages] = useState<AssistantImage[]>([]);
+    const [media, setMedia] = useState<AssistantMedia[]>([]);
+    const [imageBusy, setImageBusy] = useState(false);
+    const preparingRef = useRef(false);
+    const assets = useAssetStore(state => state.assets);
+    const imageGeneration = useRef(0);
+    const imageScope = useRef({ projectId: assistant.projectId, sessionId: assistant.sessionId });
+    useEffect(() => {
+        const previous = imageScope.current;
+        if (previous.projectId !== assistant.projectId || previous.sessionId && previous.sessionId !== assistant.sessionId) {
+            imageGeneration.current++; setImages([]); setMedia([]); setImageBusy(false); preparingRef.current = false;
+        }
+        imageScope.current = { projectId: assistant.projectId, sessionId: assistant.sessionId };
+    }, [assistant.projectId, assistant.sessionId]);
+    const addImages = async (load: () => Promise<AssistantImage[]>) => {
+        if (imageBusy || preparingRef.current || assistant.streaming || assistant.modelBusy) return;
+        const generation = imageGeneration.current;
+        preparingRef.current = true; setImageBusy(true);
+        try {
+            const added = await load(); assertUserScope(scope);
+            if (generation !== imageGeneration.current) return;
+            if (images.length + added.length > ASSISTANT_IMAGE_LIMIT) throw new Error('一次消息最多带 8 张图片');
+            setImages(current => [...current, ...added]);
+        } catch (error) { if (generation === imageGeneration.current) message.error(error instanceof Error ? error.message : '读取图片失败'); }
+        finally { if (generation === imageGeneration.current) { preparingRef.current = false; setImageBusy(false); } }
+    };
+    const addFiles = async (files: File[]) => {
+        if (imageBusy || preparingRef.current || assistant.streaming || assistant.modelBusy || !files.length) return;
+        if (files.some(file => !assistantFileKind(file))) { message.error('支持图片、MP4/WebM 视频、MP3/WAV/OGG/M4A 音频，以及 TXT/MD/JSON/CSV/SRT/VTT 文字文件'); return; }
+        if (files.filter(file => assistantFileKind(file) === 'image').length + images.length > 8 || files.filter(file => assistantFileKind(file) !== 'image').length + media.length > 8) { message.error('一条消息最多带 8 张图片和 8 个其他附件'); return; }
+        const generation = imageGeneration.current; preparingRef.current = true; setImageBusy(true);
+        try {
+            for (const file of files) {
+                if (generation !== imageGeneration.current) return;
+                if (assistantFileKind(file) === 'image') {
+                    const image = await prepareAssistantImage(file, file.name); assertUserScope(scope);
+                    if (generation === imageGeneration.current) setImages(current => [...current, image]);
+                } else {
+                    const attachment = await prepareAssistantMedia(file, scope); assertUserScope(scope);
+                    if (generation === imageGeneration.current) setMedia(current => [...current, attachment]);
+                }
+            }
+        } catch (error) { message.error(error instanceof Error ? error.message : '准备附件失败，已完成的附件会保留'); }
+        finally { if (generation === imageGeneration.current) { preparingRef.current = false; setImageBusy(false); } }
+    };
     const [selectedSkill, setSelectedSkill] = useState<HubSkill | null>(null);
     useEffect(() => { setSelectedSkill(null); }, [assistant.projectId]);
     useEffect(() => { if (props.prefill) setDraft(props.prefill.text); }, [props.prefill]);
@@ -113,17 +164,44 @@ export function CanvasAssistantSidebar(props: Props) {
     const attachedIds = selectionAttached ? selectedNodeIds : [];
 
     const send = useCallback(() => {
-        const text = draft;
-        if (!text.trim() || readOnly || assistant.streaming || assistant.sessionBusy) return;
-        followLatestRef.current = true;
-        setDraft("");
-        setSelectedSkill(null);
+        const text = draft.trim() || (images.length || media.length ? '请分析这些附件。' : '');
+        if (!text || readOnly || assistant.sessionBusy || imageBusy || preparingRef.current) return;
+        if (assistant.streaming) {
+            if (referencedAssetIdsInPrompt(text).length || selectedSkill || images.length || media.length) {
+                message.info('补充要求沿用当前素材和技能；添加新素材或切换技能请在这轮结束后发送。');
+                return;
+            }
+            void assistant.supplement(text).then(accepted => { if (accepted) setDraft(current => current === text ? '' : current); });
+            return;
+        }
         // @ 引用到的素材库素材由界面按用户原文推导后交给后端校验归属：
         // 模型不能自己声明要读哪些素材。
-        const assetReferences = referencedAssetIdsInPrompt(text)
+        const assetReferences = [...new Set([...referencedAssetIdsInPrompt(text), ...media.flatMap(item => item.assetId ? [item.assetId] : [])])]
             .map((id) => ({ kind: "asset" as const, id }));
-        void assistant.send(text, attachedIds, assetReferences, selectedSkill ?? undefined);
-    }, [assistant, attachedIds, draft, readOnly, selectedSkill]);
+        const generation = imageGeneration.current;
+        preparingRef.current = true; setImageBusy(true);
+        void (async () => {
+            try {
+                const available = [...references, ...(props.includeAssetLibrary !== false ? buildAssetMentionReferences(assets) : [])];
+                const mediaReferences = [...new Map([...media, ...assistantReferencedMedia(text, attachedIds, available)].map(item => [item.assetId || item.nodeId || item.id, item])).values()];
+                if (mediaReferences.length > 8) throw new Error('附件和音视频引用合计最多 8 项，请减少引用或选区');
+                const referenced = await assistantReferenceImages(text, assistant.status?.model?.maxImages ? attachedIds : [], available, assistant.projectId);
+                const editing = await props.resolveVisualReferences?.(text) || [];
+                assertUserScope(scope);
+                if (generation !== imageGeneration.current) return;
+                const visual = [...images, ...referenced, ...editing];
+                if (visual.length > ASSISTANT_IMAGE_LIMIT) throw new Error('附件和引用合计最多 8 张图片，请减少引用或取消部分选区');
+                await mediaActions.resume();
+                assertUserScope(scope);
+                if (generation !== imageGeneration.current) return;
+                followLatestRef.current = true; setDraft(''); setImages([]); setMedia([]); setSelectedSkill(null); preparingRef.current = false; setImageBusy(false);
+                const allAssetReferences = [...new Map([...assetReferences, ...mediaReferences.flatMap(item => item.assetId ? [{ kind: 'asset' as const, id: item.assetId }] : [])].map(item => [item.id, item])).values()];
+                const admitted = await assistant.send(text, attachedIds, allAssetReferences, selectedSkill ?? undefined, visual, mediaReferences);
+                if (admitted === false && generation === imageGeneration.current) { setImages(images); setMedia(media); setDraft(current => current || draft); setSelectedSkill(current => current || selectedSkill); }
+            } catch (error) { message.error(error instanceof Error ? error.message : '读取引用图片失败'); }
+            finally { if (generation === imageGeneration.current) { preparingRef.current = false; setImageBusy(false); } }
+        })();
+    }, [assistant, attachedIds, draft, readOnly, selectedSkill, images, media, imageBusy, references, assets, props.includeAssetLibrary, props.resolveVisualReferences, scope, message, mediaActions.resume]);
 
     const startResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -209,11 +287,12 @@ export function CanvasAssistantSidebar(props: Props) {
                         proposalActionLabel={props.proposalActionLabel}
                         onDismissProposal={assistant.markProposalDismissed}
                     />
-                <CreatorMediaTasks assistant={assistant} onStart={proposal => void mediaActions.start(proposal)} feedback={mediaActions.feedback} />
+                <CreatorMediaTasks assistant={assistant} readOnly={readOnly} items={mediaActions.items} onOutcome={mediaActions.onOutcome} onReject={proposal=>void mediaActions.reject(proposal).catch(error=>message.error(error instanceof Error?error.message:'拒绝失败'))} onStart={proposal => void mediaActions.start(proposal)} feedback={mediaActions.feedback} />
 
                 {assistant.pendingUserText ? (
                     <div className="canvas-assistant-turn">
                         <CanvasAssistantUserMessage text={assistant.pendingUserText} selectedCount={assistant.pendingSelectedNodeIds.length} requestedSkill={assistant.pendingRequestedSkill} />
+                        {assistant.instructions?.map(item => <p className="canvas-assistant-meta" key={item.instructionId}>补充要求：{item.message} · {item.state === 'received' ? '已交给助手' : item.state === 'queued' ? '等待当前步骤结束' : '尚未处理'}</p>)}
                         <AssistantToolActivityView items={assistant.toolActivity} live={assistant.streaming} />
                         {assistant.streamed ? <CanvasAssistantReply text={assistant.streamed} isStreaming={assistant.streaming} /> : null}
                         {assistant.streaming ? (
@@ -241,12 +320,24 @@ export function CanvasAssistantSidebar(props: Props) {
                 if (log) log.scrollTop = log.scrollHeight;
             }}>回到最新消息</Button> : null}
 
+            {assistant.instructionError ? <p className="canvas-assistant-failed" role="status">{assistant.instructionError}</p> : null}
+            {mediaActions.permissionError ? <p className="canvas-assistant-failed" role="status">{mediaActions.permissionError}</p>:null}
+            {images.length > 0 && assistant.status?.model?.maxImages === 0 ? <div className="canvas-assistant-notice" role="status"><span>当前助手模型未开启图片输入。</span><Button size="small" onClick={onOpenModelSettings}>配置视觉模型</Button></div> : null}
             <CanvasAssistantComposer
+                permissionMode={mediaActions.mode} permissionBusy={mediaActions.permissionBusy} mediaBusy={mediaActions.pending}
+                onPermissionModeChange={mode=>void mediaActions.changeMode(mode).catch(error=>message.error(error instanceof Error?error.message:'切换权限失败'))}
+                images={images} imageBusy={imageBusy}
+                media={media} onRemoveMedia={id => setMedia(current => current.filter(item => item.id !== id))}
+                onAddFiles={files => void addFiles(files)}
+                onRemoveImage={id => setImages(current => current.filter(image => image.id !== id))}
+                onCapturePreview={props.captureVisual ? () => void addImages(() => props.captureVisual!('preview')) : undefined}
+                onCaptureSelection={props.captureVisual ? () => void addImages(() => props.captureVisual!('selection')) : undefined}
                 value={draft}
                 onChange={setDraft}
                 onSend={send}
-                onStop={() => void assistant.stop()}
+                onStop={() => void mediaActions.stop().catch(error=>message.error(error instanceof Error?error.message:'停止制作失败'))}
                 streaming={assistant.streaming}
+                canSupplement={assistant.canSupplement}
                 disabled={composerDisabled}
                 disabledReason={composerReason}
                 references={references}

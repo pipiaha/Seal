@@ -6,6 +6,12 @@ import (
 	"infinite-canvas/backend/internal/model"
 )
 
+func (r *Repository) HasEditingMediaReference(userID, canvasID, editID, assetID, resourceID string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.EditingAssetReference{}).Where("user_id = ? AND canvas_id = ? AND edit_id = ? AND asset_id = ? AND resource_id = ?", userID, canvasID, editID, assetID, resourceID).Count(&count).Error
+	return count > 0, err
+}
+
 func (r *Repository) PinEditingAsset(reference model.EditingAssetReference) (bool, error) {
 	created := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&reference)
 	if created.Error != nil {

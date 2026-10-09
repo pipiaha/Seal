@@ -106,6 +106,20 @@
   };
   window.addEventListener('message', async event => {
     if (event.origin !== config.parentOrigin || event.source !== parent) return;
+    if (event.data?.type === 'beeftv:visual-context' && event.data.editId === config.editId) {
+      try {
+        for (;;) { const current = pending; await current; if (current === pending) break; }
+        if (writeError) throw new Error(writeError);
+        const player = window.__BeeftvEditor?.player?.getState();
+        if (!player) throw new Error('剪辑编辑器尚未就绪');
+        const clipIds = player.elements.filter(clip => player.selectedElementIds?.has(clip.key || clip.id) || player.selectedElementId === (clip.key || clip.id)).map(clip => clip.id);
+        parent.postMessage({ type: 'beeftv:visual-context-result', editId: config.editId, requestId: event.data.requestId,
+          selection: { playheadTime: player.currentTime, clipIds } }, config.parentOrigin);
+      } catch (error) {
+        parent.postMessage({ type: 'beeftv:visual-context-result', editId: config.editId, requestId: event.data.requestId, error: error.message }, config.parentOrigin);
+      }
+      return;
+    }
     if (event.data?.type === 'beeftv:prepare-update' && event.data.editId === config.editId) {
       // Wait through the queue, including writes added while an earlier write finishes.
       for (;;) { const current = pending; await current; if (current === pending) break; }

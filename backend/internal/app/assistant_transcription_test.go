@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/transcription"
@@ -10,13 +11,36 @@ import (
 	"testing"
 )
 
+func assistantTestWAV() []byte {
+	wav := make([]byte, 844)
+	copy(wav, "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:], 836)
+	copy(wav[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(wav[16:], 16)
+	binary.LittleEndian.PutUint16(wav[20:], 1)
+	binary.LittleEndian.PutUint16(wav[22:], 1)
+	binary.LittleEndian.PutUint32(wav[24:], 16000)
+	binary.LittleEndian.PutUint32(wav[28:], 32000)
+	binary.LittleEndian.PutUint16(wav[32:], 2)
+	binary.LittleEndian.PutUint16(wav[34:], 16)
+	copy(wav[36:], "data")
+	binary.LittleEndian.PutUint32(wav[40:], 800)
+	return wav
+}
+
 func TestAssistantTranscriptionKeepsIndependentEditAndReusesTask(t *testing.T) {
 	t.Setenv("CANVAS_WHISPER_BASE_URL", "http://127.0.0.1:18080/asr")
 	svc, db := newTimelineTaskTestService(t)
+	svc.dataDir = t.TempDir()
 	project := model.EditingProject{ID: "cut_asr", UserID: "owner", Title: "Independent edit"}
-	resource := model.Resource{ID: "speech", UserID: "owner", Kind: "audio", Status: model.ResourceStatusReady, Provider: "local", MimeType: "audio/wav", Size: 100}
-	asset := model.Asset{ID: "voice", UserID: "owner", Kind: "audio", Status: model.AssetVersionStatusConfirmed, PayloadJSON: `{"data":{"storageKey":"resource:speech"}}`}
-	for _, value := range []any{&project, &resource, &asset} {
+	wav := assistantTestWAV()
+	resource, err := svc.UploadLocalResourceFile("owner", "speech.wav", int64(len(wav)), "audio", 0, 0, 25, bytes.NewReader(wav))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"data": map[string]string{"storageKey": "resource:" + resource.ID}})
+	asset := model.Asset{ID: "voice", UserID: "owner", Kind: "audio", Status: model.AssetVersionStatusConfirmed, PayloadJSON: string(payload)}
+	for _, value := range []any{&project, &asset} {
 		if err := db.Create(value).Error; err != nil {
 			t.Fatal(err)
 		}

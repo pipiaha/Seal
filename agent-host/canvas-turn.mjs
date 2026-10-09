@@ -6,6 +6,8 @@
 
 export const SUPPORTED_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'];
 import { workflowHistory } from './workflow-journal.mjs';
+import { TOOL_CHECKPOINT_TYPE } from './turn-context.mjs';
+import { turnInstructions } from './turn-instructions.mjs';
 
 export function newTurnAccumulator() {
   return { turnId: '', seq: 0, toolSeq: 0, revisionBefore: 0, revisionAfter: 0,
@@ -106,10 +108,12 @@ export function turnContextPrefix({ canvasId, selectedNodeIds = [], references =
 
 // providerRegistration 构造要登记给 pi 的供应商：
 // 密钥以环境变量引用形式传入，宿主进程内解析，不写进 auth.json。
-export function providerRegistration({ api, baseUrl, modelId, maxTokens, contextWindow }) {
+export function providerRegistration({ api, baseUrl, modelId, maxTokens, contextWindow, maxImages = 0, maxImageBytes = 0 }) {
   return {
     name: 'Seal', baseUrl, apiKey: '$BEEFTV_AGENT_API_KEY', api,
-    models: [{ id: modelId, name: modelId, reasoning: false, input: ['text'],
+    models: [{ id: modelId, name: modelId, reasoning: false, input: maxImages > 0 ? ['text', 'image'] : ['text'],
+      ...(maxImages > 0 && maxImageBytes > 0 ? { inputLimits: { images: { maxPerMessage: maxImages, maxPerRequest: maxImages,
+        resize: { maxWidth: 2048, maxHeight: 2048, maxBytes: Math.floor(maxImageBytes * 4 / 3), jpegQuality: 85 } } } } : {}),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow, maxTokens }],
   };
@@ -155,5 +159,19 @@ export function projectTurnHistory(entries, turnType, activeTurnId = '') {
   }
   return [...turns.values()]
     .filter((entry) => entry.finished || entry.data.turnId !== activeTurnId)
-    .map((entry) => ({ ...entry.data, workflows: workflowHistory(entries).filter(item => item.turnId === entry.data.turnId) }));
+    .map((entry) => {
+      const checkpoints = entries.filter(item => item.type === 'custom' && item.customType === TOOL_CHECKPOINT_TYPE && item.data?.turnId === entry.data.turnId).map(item => item.data);
+      const latest = new Map(checkpoints.map(item => [item.toolCallId, item]));
+      const completed = checkpoints.filter(item => item.state === 'completed').at(-1);
+      const instructions = turnInstructions(entries, entry.data.turnId).map(item => ({ ...item,
+        state: item.state === 'queued' ? 'not_processed' : item.state }));
+      return { ...entry.data, ...(!entry.finished ? {
+        toolCalls: [...latest.values()].map(item => ({ toolCallId: item.toolCallId, tool: item.tool, isError: item.state !== 'completed' })),
+        toolActivity: [...latest.values()].map(item => ({ toolCallId: item.toolCallId, tool: item.tool,
+          status: item.state === 'running' ? 'interrupted' : item.state })),
+        change: completed?.change?.revisionAfter > completed?.change?.revisionBefore ? completed.change : null,
+        proposals: completed?.proposals || [],
+      } : {}), checkpoints: [...latest.values()].map(({ change, proposals, ...item }) => item), instructions,
+        workflows: workflowHistory(entries).filter(item => item.turnId === entry.data.turnId) };
+    });
 }

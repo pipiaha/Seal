@@ -26,9 +26,17 @@ var assistantProtocols = map[string]string{
 var managedAssistantModels = []string{beefapi.DefaultManagedAssistantModel, "claude-opus-5-5", "deepseek-v4.1-flash", "glm-5.3"}
 
 type AssistantModelProfile struct {
-	Model      string `json:"model"`
-	Capability string `json:"capability"`
-	Protocol   string `json:"protocol"`
+	Model            string `json:"model"`
+	Capability       string `json:"capability"`
+	Protocol         string `json:"protocol"`
+	CapabilityConfig struct {
+		Text struct {
+			References struct {
+				MaxImages     int `json:"maxImages"`
+				MaxImageBytes int `json:"maxImageBytes"`
+			} `json:"references"`
+		} `json:"text"`
+	} `json:"capabilityConfig"`
 }
 
 type AssistantChannel struct {
@@ -143,6 +151,16 @@ func ResolveAssistantChannelModel(snapshot AssistantConfigSnapshot, modelKey str
 		ChannelID: channel.ID, ChannelName: AssistantChannelName(channel),
 		Model: modelID, ModelKey: modelKey, Protocol: protocol,
 		BaseURL: strings.TrimSpace(channel.BaseURL), APIKey: strings.TrimSpace(channel.APIKey),
+	}
+	for _, profile := range channel.ModelProfiles {
+		if assistantModelAlias(channel, profile.Model) == modelID {
+			refs := profile.CapabilityConfig.Text.References
+			if refs.MaxImages > 0 && refs.MaxImageBytes > 0 {
+				provider.MaxImages = min(refs.MaxImages, 8)
+				provider.MaxImageBytes = min(refs.MaxImageBytes, 4<<20)
+			}
+			break
+		}
 	}
 	if provider.BaseURL == "" {
 		provider.BaseURL = strings.TrimSpace(snapshot.BaseURL)

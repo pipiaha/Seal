@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 const requests: Array<{ url: string; method: string; body: string }> = [];
 let chatResponse: (() => Response | Promise<Response>) | null = null;
 let sessionResponse: (() => Response) | null = null;
+let historyData: unknown = null;
 
 mock.module("@/services/api/request", () => ({
 	apiBaseURL: "http://127.0.0.1:54321/api",
@@ -21,7 +22,7 @@ mock.module("@/services/api/request", () => ({
         }
     },
     http: {
-        get: async () => ({ available: true }),
+        get: async () => historyData ?? ({ available: true }),
         post: async () => {
             const response = sessionResponse ? sessionResponse() : new Response(JSON.stringify({ code: 0, data: { token: "ui-token" } }), { status: 200, headers: { "Content-Type": "application/json" } });
             if (!response.ok) throw new (class extends Error { status = response.status; })("session failed");
@@ -41,6 +42,7 @@ const {
     ensureAgentUiSession,
     resetAgentUiSession,
     streamAgentChat,
+    getAssistantHistory,
 } = await import("@/services/api/agent-assistant");
 
 /** 把整段 NDJSON 按给定分片切开发成流，模拟真实网络分片（可切到单个字节）。 */
@@ -75,6 +77,7 @@ beforeEach(() => {
     requests.length = 0;
     chatResponse = null;
     sessionResponse = null;
+    historyData = null;
     cancelResponse = () => new Response(JSON.stringify({ code: 0, accepted: true }), { status: 202 });
     resetAgentUiSession();
     installFetch();
@@ -87,6 +90,24 @@ afterEach(() => {
 const TURN_END = JSON.stringify({ type: "turn_end", reply: "完成", toolCalls: [], error: null, cancelled: false });
 
 describe("创作助手回合流边界", () => {
+    test('history projection preserves active identity and queued supplements for page reopen', async () => {
+        const activeTurn = { turnId: 't1', sessionId: 's1', userText: 'edit', selectedNodeIds: ['a'],
+            instructions: [{ instructionId: 'i1', message: 'white subtitles', state: 'queued', turnId: 't1' }] };
+        historyData = { sessionId: 's1', turns: [], activeTurn };
+        expect((await getAssistantHistory('c1')).activeTurn).toEqual(activeTurn);
+        historyData = { sessionId: 's1', turns: [], activeTurn: null };
+        expect((await getAssistantHistory('c1')).activeTurn).toBeNull();
+    });
+    test('turn identity and supplement delivery precede settlement even across split frames', async () => {
+        chatResponse = () => chatResponseOf([
+            JSON.stringify({ type: 'turn_start', turnId: 't1', sessionId: 's1' }) + '\n',
+            JSON.stringify({ type: 'instruction', instruction: { instructionId: 'i1', turnId: 't1', message: 'white', state: 'received' } }) + '\n',
+            JSON.stringify({ type: 'turn_end', reply: 'done', toolCalls: [], cancelled: false, error: null }) + '\n',
+        ]);
+        const seen: string[] = [];
+        await streamAgentChat('c1', 'edit', { onTurnStart: event => seen.push(event.turnId), onInstruction: item => seen.push(item.state), onTurnEnd: () => seen.push('end') });
+        expect(seen).toEqual(['t1', 'received', 'end']);
+    });
     test("工具状态在正文和结算之前实时到达；跨字节分片不泄露额外字段", async () => {
         const lines = [
             { type: 'tool', phase: 'start', toolCallId: 'one', tool: 'edit_read', args: { secret: 'hidden' } },
@@ -360,4 +381,21 @@ describe("撤销失败原因", () => {
         expect(assistantUndoFailure(failure("brand_new_reason"))).toBe("unknown");
         expect(assistantUndoFailure(new Error("boom"))).toBe("unknown");
     });
+});
+
+test('chat sends media references and actual text contents together with image attachments', async () => {
+    chatResponse = () => chatResponseOf([`${TURN_END}\n`]);
+    const media=[{id:'v',name:'video.mp4',kind:'video' as const,assetId:'a1'},{id:'s',name:'字幕.srt',kind:'text' as const,content:'实际字幕'}];
+    await streamAgentChat('c1','分析附件',{}, {media,references:[{kind:'asset',id:'a1'}]});
+    const chat=requests.find(item=>item.url.includes('/assistant/chat'));
+    const body=JSON.parse(chat!.body); expect(body.media).toEqual(media); expect(body.references).toEqual([{kind:'asset',id:'a1'}]);
+});
+
+test('automatic continuation carries the original session and durable proposal identity', async () => {
+    chatResponse = () => chatResponseOf([`${TURN_END}\n`]);
+    await streamAgentChat('c1','继续处理结果',{}, {sessionId:'s1',continuationProposalId:'media_1'});
+    const chat=requests.find(item=>item.url.includes('/assistant/chat'));
+    const body=JSON.parse(chat!.body);
+    expect(body.sessionId).toBe('s1');
+    expect(body.continuationProposalId).toBe('media_1');
 });

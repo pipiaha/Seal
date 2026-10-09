@@ -10,6 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $previewRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $previewExecutable = Join-Path $previewRepoRoot '.local\cache\edit-browser-tools\Seal-preview.exe'
+$previewNextExecutable = Join-Path $previewRepoRoot '.local\cache\edit-browser-tools\Seal-preview-next.exe'
+if (Test-Path -LiteralPath $previewNextExecutable -PathType Leaf) { $previewExecutable = $previewNextExecutable }
 if (-not (Test-Path -LiteralPath $previewExecutable -PathType Leaf)) {
     throw 'The desktop preview has not been built yet.'
 }

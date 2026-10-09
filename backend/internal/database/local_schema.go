@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 17
+const CurrentSchemaVersion int64 = 18
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -94,6 +94,7 @@ func canonicalLocalMigrations() []localMigration {
 		{version: 15, name: "standalone-editing-projects", apply: func(tx *gorm.DB) error { return tx.AutoMigrate(&model.EditingProject{}) }},
 		{version: 16, name: "local-skill-hub", apply: func(tx *gorm.DB) error { return tx.AutoMigrate(&model.UserSkillState{}, &model.SkillRuntimeRevision{}) }},
 		{version: 17, name: "assistant-media-proposals", apply: func(tx *gorm.DB) error { return tx.AutoMigrate(&model.AssistantMediaProposal{}) }},
+		{version: 18, name: "assistant-permissions-continuation", apply: func(tx *gorm.DB) error { return tx.AutoMigrate(&model.AssistantMediaProposal{}) }},
 	}
 }
 
@@ -475,6 +476,13 @@ func requireReconciledSchema(db *gorm.DB) error {
 	}
 	if version >= 12 {
 		if version >= 17 {
+			if version >= 18 {
+				for _, column := range []string{"session_id", "decision", "auto_continue", "continuation_turn_id"} {
+					if !db.Migrator().HasColumn(&model.AssistantMediaProposal{}, column) {
+						return fmt.Errorf("助手制作权限列 %s 缺失", column)
+					}
+				}
+			}
 			if !db.Migrator().HasTable(&model.AssistantMediaProposal{}) {
 				return fmt.Errorf("本地助手生成提议表缺失")
 			}
