@@ -36,16 +36,19 @@ type ManifestFilePart struct {
 }
 
 type ManifestResponse struct {
-	TaskIDPaths     []string `json:"taskIdPaths,omitempty"`
-	StatusPaths     []string `json:"statusPaths,omitempty"`
-	ErrorPaths      []string `json:"errorPaths,omitempty"`
-	MessagePaths    []string `json:"messagePaths,omitempty"`
-	TextPaths       []string `json:"textPaths,omitempty"`
-	ReasoningPaths  []string `json:"reasoningPaths,omitempty"`
-	ResultURLPaths  []string `json:"resultUrlPaths,omitempty"`
-	ResultPaths     []string `json:"resultPaths,omitempty"`
-	ResultKind      string   `json:"resultKind,omitempty"`
-	ResultEphemeral bool     `json:"resultEphemeral,omitempty"`
+	InlineBase64Paths []string          `json:"inlineBase64Paths,omitempty"`
+	InlineMIME        string            `json:"inlineMime,omitempty"`
+	StatusMap         map[string]Status `json:"statusMap,omitempty"`
+	TaskIDPaths       []string          `json:"taskIdPaths,omitempty"`
+	StatusPaths       []string          `json:"statusPaths,omitempty"`
+	ErrorPaths        []string          `json:"errorPaths,omitempty"`
+	MessagePaths      []string          `json:"messagePaths,omitempty"`
+	TextPaths         []string          `json:"textPaths,omitempty"`
+	ReasoningPaths    []string          `json:"reasoningPaths,omitempty"`
+	ResultURLPaths    []string          `json:"resultUrlPaths,omitempty"`
+	ResultPaths       []string          `json:"resultPaths,omitempty"`
+	ResultKind        string            `json:"resultKind,omitempty"`
+	ResultEphemeral   bool              `json:"resultEphemeral,omitempty"`
 	// BinaryPayload 表示 create 同步返回二进制媒体（如 /audio/speech 的音频流）。
 	// 声明式解析会把整个响应体包装为对应能力的单个媒体结果，不做 JSON 路径提取。
 	BinaryPayload bool `json:"binaryPayload,omitempty"`
@@ -580,16 +583,19 @@ func (a manifestAdapter) parse(payload map[string]any, c PollContext) CreateResu
 	env := map[string]any{"response": payload, "taskId": c.TaskID, "request": manifestRequestValues(c.Request)}
 	id := manifestResponseString(response.TaskID, env)
 	if id == "" {
-		id = firstPathValue(payload, response.TaskIDPaths...)
+		id = firstPathScalar(payload, response.TaskIDPaths...)
 	}
 	if id == "" {
 		id = c.TaskID
 	}
 	statusText := manifestResponseString(response.Status, env)
 	if statusText == "" {
-		statusText = firstPathValue(payload, response.StatusPaths...)
+		statusText = firstPathScalar(payload, response.StatusPaths...)
 	}
 	status := normalizeStatus(statusText)
+	if mapped, ok := response.StatusMap[strings.ToLower(strings.TrimSpace(statusText))]; ok {
+		status = mapped
+	}
 	if status == "" {
 		status = StatusPending
 	}
@@ -635,6 +641,10 @@ func (a manifestAdapter) parse(payload map[string]any, c PollContext) CreateResu
 	for _, path := range paths {
 		for _, value := range mediaPathValues(payload, path) {
 			item := MediaReference{URL: value, Kind: a.manifest.Response.ResultKind, Ephemeral: a.manifest.Response.ResultEphemeral}
+			if strings.HasPrefix(value, "data:") {
+				item.DataURL = value
+				item.URL = ""
+			}
 			switch a.manifest.Response.ResultKind {
 			case "image":
 				result.Images = append(result.Images, item)
@@ -645,7 +655,17 @@ func (a manifestAdapter) parse(payload map[string]any, c PollContext) CreateResu
 			}
 		}
 	}
-	if status == StatusPending && (result.Text != "" || len(result.Images) > 0 || len(result.Videos) > 0 || len(result.Audios) > 0) {
+	for _, path := range response.InlineBase64Paths {
+		for _, value := range mediaPathValues(payload, path) {
+			item := MediaReference{DataURL: normalizeManifestInlineDataURL(value, response.ResultKind, response.InlineMIME), Kind: response.ResultKind, Ephemeral: response.ResultEphemeral}
+			if response.ResultKind == "image" {
+				result.Images = append(result.Images, item)
+			} else {
+				result.Videos = append(result.Videos, item)
+			}
+		}
+	}
+	if status == StatusPending && statusText == "" && (result.Text != "" || len(result.Images) > 0 || len(result.Videos) > 0 || len(result.Audios) > 0) {
 		status = StatusSucceeded
 	}
 	if result.Text == "" && result.Reasoning == "" && len(result.Images) == 0 && len(result.Videos) == 0 && len(result.Audios) == 0 {
@@ -1335,6 +1355,19 @@ func firstPathValue(payload map[string]any, paths ...string) string {
 		value := pathValue(payload, path)
 		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}
+
+func firstPathScalar(payload map[string]any, paths ...string) string {
+	for _, path := range paths {
+		value := pathValue(payload, path)
+		switch value.(type) {
+		case string, float64, json.Number, bool:
+			if text := strings.TrimSpace(fmt.Sprint(value)); text != "" {
+				return text
+			}
 		}
 	}
 	return ""

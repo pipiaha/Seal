@@ -18,6 +18,8 @@ export const MODEL_SERVICE_PRESETS: ServicePreset[] = [
     { id: "ark", name: "火山方舟", subtitle: "豆包 · Seedream · Seedance", icon: "Volcengine", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", apiFormat: "openai", protocols: { text: "chat-completion", image: "volcengine-ark-image", video: "volcengine-ark-video" } },
     { id: "kling", name: "可灵", subtitle: "Kling 视频", icon: "Kling", baseUrl: "https://api.klingai.com", apiFormat: "openai", protocols: { video: "kling-video" }, manualCatalog: ["video"] },
     { id: "vidu", name: "Vidu", subtitle: "Vidu 视频", icon: "Vidu", baseUrl: "https://api.vidu.com", apiFormat: "openai", protocols: { video: "vidu-video" }, manualCatalog: ["video"] },
+    { id: "agnes", name: "Agnes AI", subtitle: "Agnes Image · Agnes Video", icon: "AgnesAI", baseUrl: "https://apihub.agnes-ai.com/v1", apiFormat: "openai", protocols: { image: "agnes-image", video: "agnes-video" }, manualCatalog: ["image", "video"] },
+    { id: "comfyui", name: "本地 ComfyUI", subtitle: "连接本机工作流", icon: "ComfyUI", baseUrl: "http://127.0.0.1:8188", apiFormat: "openai", protocols: { image: "comfyui-image", video: "comfyui-video" }, manualCatalog: ["image", "video"] },
     { id: "doubao-tts", name: "豆包语音合成", subtitle: "火山引擎语音 · TTS 2.0", icon: "Volcengine", baseUrl: "https://openspeech.bytedance.com", apiFormat: "openai", protocols: { audio: "doubao-tts" }, manualCatalog: ["audio"], audioModel: "seed-tts-2.0" },
     { id: "xfyun-tts", name: "科大讯飞", subtitle: "在线语音合成（流式版）", icon: "Spark", baseUrl: "https://tts-api.xfyun.cn", apiFormat: "openai", protocols: { audio: "xfyun-tts" }, manualCatalog: ["audio"], audioModel: "xfyun-tts" },
 ];
@@ -36,6 +38,7 @@ export const CAPABILITY_LABELS: Record<ModelCapability, string> = { text: "文�
 export function servicePresetFor(channel: ModelChannel): ModelServicePresetId {
     try {
         const host = new URL(channel.baseUrl).hostname;
+        if (channel.modelProfiles?.some(profile => profile.protocol?.startsWith("comfyui-"))) return "comfyui";
         if (/^ark\.[a-z0-9-]+\.volces\.com$/.test(host)) return "ark";
         const preset = MODEL_SERVICE_PRESETS.find((item) => item.baseUrl && new URL(item.baseUrl).hostname === host);
         if (preset) return preset.id;
@@ -57,7 +60,8 @@ export function serviceModelProfile(channel: ModelChannel, item: ChannelModelCat
     // user to select its contract unless the catalog explicitly declares it.
     if (fullvideoFull && capability === "video") proposed = item.supportedEndpointTypes?.includes("full-video") ? "full-video" : undefined;
     const protocol = protocols.find((p) => p.value === proposed && p.capability === capability && p.enabled !== false)?.value;
-    return { ...existing, model: item.id, displayName: existing?.displayName || item.displayName, capability, protocol, capabilityConfig: existing?.capability === capability && existing.capabilityConfig ? existing.capabilityConfig : (capability === "image" || capability === "video") && protocol ? defaultModelCapabilityConfig(protocol, item.id) : undefined };
+    const capabilityConfig = existing?.capability === capability && existing.capabilityConfig ? existing.capabilityConfig : (capability === "image" || capability === "video") && protocol ? defaultModelCapabilityConfig(protocol, item.id) : undefined;
+    return { ...existing, model: item.id, displayName: existing?.displayName || item.displayName, capability, protocol, capabilityConfig };
 }
 
 export function serviceConnectionError(channel: ModelChannel): string {
@@ -72,7 +76,8 @@ export function serviceConnectionError(channel: ModelChannel): string {
         if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return "请填写不含账号、查询参数或片段的 HTTP(S) 服务地址";
         if (/\/(chat\/completions|responses|images\/generations|models)\/?$/i.test(url.pathname)) return "请填写服务的基础地址，不要包含模型或生成接口路径";
     } catch { return "请填写完整的服务地址，例如 https://api.example.com/v1"; }
-    if (!channel.apiKey.trim() && !channel.hasApiKey) return "请填写 API Key";
+    if (channel.authType !== "none" && !channel.apiKey.trim() && !channel.hasApiKey) return "请填写 API Key";
+    if (channel.authType === "header" && !channel.authHeader?.trim()) return "请填写鉴权请求头名称";
     if (channel.modelProfiles?.some((profile) => profile.protocol === "xfyun-tts") && !channel.secretKey?.trim() && !channel.hasSecretKey) return "请填写讯飞 API Secret";
     for (const profile of channel.modelProfiles || []) {
         if (!channel.models.includes(profile.model)) continue;

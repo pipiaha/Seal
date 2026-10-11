@@ -1,7 +1,5 @@
 import type { ModelProtocol } from "@/lib/model-protocols";
-import { decodeChannelModel, encodeChannelModel, isBuiltinBeefAPIChannel, normalizeModelOptionValue, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
-
-export const MANAGED_ASSISTANT_MODELS = ["gpt-6-astra", "claude-opus-5-5", "deepseek-v4.1-flash", "glm-5.3"] as const;
+import { decodeChannelModel, encodeChannelModel, normalizeModelOptionValue, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 
 /**
  * 画布助手只能走这三种对话协议：它需要多轮工具调用，
@@ -29,9 +27,7 @@ function channelAssistantModels(channel: ModelChannel, defaultTextModel: string)
         const protocol = channel.interfaceType || (channel.apiFormat === "claude" ? "claude-api" : channel.apiFormat === "openai" ? DEFAULT_TEXT_PROTOCOL : "unsupported");
         if (protocolSupported(protocol)) available.push(textSelection.model);
     }
-    const models = isBuiltinBeefAPIChannel(channel)
-        ? MANAGED_ASSISTANT_MODELS.map((model) => channel.modelAliases?.[model] || model).filter((model) => available.includes(model))
-        : available;
+    const models = available;
     return models.map((model) => encodeChannelModel(channel.id, model));
 }
 
@@ -62,5 +58,6 @@ export function normalizeAssistantModel(config: AiConfig, value: unknown): strin
 
 /** 助手实际使用的模型：未单独选择时跟随默认文本模型。 */
 export function resolveAssistantModel(config: AiConfig): string {
+    if (config.modelSelectionRequired?.includes("assistantModel")) return "";
     return normalizeAssistantModel(config, config.assistantModel || config.textModel);
 }

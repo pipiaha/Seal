@@ -22,6 +22,7 @@ const SettingsPage = lazy(() => import("@/pages/settings"));
 const EditProjectPage = lazy(() => import("@/pages/edit/project"));
 const EditingProjectsPage = lazy(() => import("@/pages/edit"));
 const SkillsPage = lazy(() => import("@/pages/skills"));
+const CallLogsPage = lazy(() => import("@/pages/call-logs"));
 const TestVoiceRecording = lazy(() => import("@/pages/test-voice-recording"));
 const UserLayout = lazy(() => import("@/layouts/user-layout"));
 const RequireFeature = lazy(() => import("@/components/workspace/require-feature").then((module) => ({ default: module.RequireFeature })));
@@ -89,6 +90,7 @@ export const router = createWorkspaceRouter([
             },
             { path: "/assets", element: deferred(<AssetsPage />) },
             { path: "/skills", element: deferred(<SkillsPage />) },
+            { path: "/call-logs", element: deferred(<CallLogsPage />) },
             { path: "/skill", element: <Navigate to="/" replace /> },
             { path: "/skills/reference", element: <Navigate to="/" replace /> },
             {

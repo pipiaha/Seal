@@ -9,6 +9,9 @@ import (
 )
 
 func MediaHydrationPolicyFor(ctx context.Context, input Input) MediaHydrationPolicy {
+	if input.Config.CustomProvider != nil {
+		return MediaHydrationPolicy{RequireURL: input.Config.CustomProvider.RequiresPublicMediaURLs, PreferURL: input.Config.CustomProvider.RequiresPublicMediaURLs}
+	}
 	if input.Config.InterfaceType == "full-video" {
 		return MediaHydrationPolicy{KeepLocal: true}
 	}

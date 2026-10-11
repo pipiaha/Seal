@@ -14,6 +14,10 @@ import (
 // provider log exists. This normally represents a preflight failure; the coarse
 // request/state variants also preserve visibility if primary log persistence failed.
 func (s *Service) ensureFailedProviderAttemptLogged(task model.Task, taskErr error) {
+	// Remote transcription records the actual HTTP request; local ASR is not a channel call.
+	if task.Type == model.TaskTypeTimelineTranscription {
+		return
+	}
 	if s == nil || s.repo == nil || strings.TrimSpace(task.ID) == "" || taskErr == nil {
 		return
 	}

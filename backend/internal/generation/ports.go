@@ -2,6 +2,7 @@ package generation
 
 import (
 	"context"
+	"infinite-canvas/backend/internal/provider/workflow"
 	"io"
 	"net/http"
 	"strings"
@@ -144,16 +145,17 @@ type CallMeta struct {
 }
 
 type Runtime struct {
-	Resources ResourcePort
-	Limits    LimitsPort
-	Receipts  ReceiptPort
-	Stages    StagePort
-	Images    ImageSubmissionPort
-	Workflow  WorkflowPort
-	Prompt    PromptPort
-	Config    ConfigPort
-	Style     StylePort
-	Probe     MediaProbePort
-	Call      CallMeta
-	Endpoints Endpoints
+	Submission workflow.Receipt
+	Resources  ResourcePort
+	Limits     LimitsPort
+	Receipts   ReceiptPort
+	Stages     StagePort
+	Images     ImageSubmissionPort
+	Workflow   WorkflowPort
+	Prompt     PromptPort
+	Config     ConfigPort
+	Style      StylePort
+	Probe      MediaProbePort
+	Call       CallMeta
+	Endpoints  Endpoints
 }

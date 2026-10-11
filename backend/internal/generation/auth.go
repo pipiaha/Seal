@@ -6,6 +6,13 @@ func ApplyAuth(req *http.Request, config Config) {
 	if req == nil {
 		return
 	}
+	if config.AuthType == "none" {
+		return
+	}
+	if config.AuthType == "header" {
+		req.Header.Set(config.AuthHeader, config.APIKey)
+		return
+	}
 	if config.APIFormat == "claude" {
 		req.Header.Set("x-api-key", config.APIKey)
 		req.Header.Set("anthropic-version", "2023-06-01")

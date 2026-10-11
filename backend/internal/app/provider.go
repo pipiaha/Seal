@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/kernel"
+	"infinite-canvas/backend/internal/provider/comfyui"
+	"infinite-canvas/backend/internal/workspace"
 	"strconv"
 	"strings"
 
@@ -44,7 +46,7 @@ func withProviderAnalytics(ctx context.Context, service *Service, task model.Tas
 		Config providerConfig `json:"config"`
 	}
 	if json.Unmarshal([]byte(task.InputJSON), &input) == nil {
-		metadata.ChannelID = firstNonEmpty(input.Config.ChannelID, systemChannelIDFromBaseURL(input.Config.BaseURL))
+		metadata.ChannelID = firstNonEmpty(input.Config.SourceChannelID, input.Config.ChannelID, systemChannelIDFromBaseURL(input.Config.BaseURL))
 		metadata.Model = firstNonEmpty(input.Config.ChannelModelKey, input.Config.Model, metadata.Model)
 		metadata.VideoSeconds, _ = strconv.Atoi(input.Config.VideoSeconds)
 		if normalized := normalizeCapability(input.Mode); normalized != "" {
@@ -425,11 +427,23 @@ func normalizedMediaMimeType(declared string, data []byte) string {
 }
 
 func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, error) {
+	if workspace.IsRetiredChannel(config.ChannelID, config.CredentialRef) || workspace.IsRetiredChannel(config.SourceChannelID, "") {
+		return providerConfig{}, BadAuthRequest("原内置渠道已移除，请重新选择模型渠道")
+	}
 	headers, err := NormalizeOutboundHeaders(config.Headers)
 	if err != nil {
 		return providerConfig{}, err
 	}
 	config.Headers = headers
+	if strings.HasPrefix(config.InterfaceType, "comfyui-") {
+		if !s.IsLocalMode() {
+			return providerConfig{}, errors.New("ComfyUI 连接仅支持本地工作区")
+		}
+		if _, err := comfyui.ValidateURL(config.BaseURL); err != nil {
+			return providerConfig{}, err
+		}
+		return config, nil
+	}
 	if s.IsLocalMode() && strings.TrimSpace(config.ChannelID) != "" {
 		// A stale hosted model selection must not reopen the system-channel
 		// catalog in a local workspace. Local users configure the provider

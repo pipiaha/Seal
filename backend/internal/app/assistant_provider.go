@@ -2,10 +2,8 @@ package app
 
 import (
 	"encoding/json"
-	"strings"
 
 	"infinite-canvas/backend/internal/assistant"
-	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/workspace"
 )
@@ -56,25 +54,11 @@ func (s *Service) ResolveAssistantProvider() (AssistantProvider, error) {
 	if err != nil {
 		return AssistantProvider{}, err
 	}
-	for index, channel := range snapshot.Channels {
-		if strings.TrimSpace(channel.Name) == "" && channel.ID == beefapi.ChannelID {
-			snapshot.Channels[index].Name = "BeefAPI"
-		}
-	}
-	return modelcatalog.ResolveAssistantProvider(snapshot, s.assistantManagedCredentialLookup())
+	return modelcatalog.ResolveAssistantProvider(snapshot, nil)
 }
 
 func (s *Service) assistantManagedCredentialLookup() modelcatalog.ManagedCredentialLookup {
-	return func(channelID, credentialRef, baseURL string) (string, string, bool) {
-		if !(beefapi.IsManagedChannel(channelID, credentialRef, baseURL) || channelID == beefapi.ChannelID) {
-			return "", "", false
-		}
-		apiKey, resolvedBaseURL, _, _, lookupErr := s.lookupBeefAPICredential()
-		if lookupErr != nil || strings.TrimSpace(apiKey) == "" {
-			return "", "", false
-		}
-		return apiKey, resolvedBaseURL, true
-	}
+	return nil
 }
 
 func assistantReasonMessage(reason string) string {
@@ -82,12 +66,7 @@ func assistantReasonMessage(reason string) string {
 }
 
 func (s *Service) resolveAssistantChannelModel(snapshot assistantConfigSnapshot, modelKey string) (AssistantProvider, string) {
-	for index, channel := range snapshot.Channels {
-		if strings.TrimSpace(channel.Name) == "" && channel.ID == beefapi.ChannelID {
-			snapshot.Channels[index].Name = "BeefAPI"
-		}
-	}
-	return modelcatalog.ResolveAssistantChannelModel(snapshot, modelKey, s.assistantManagedCredentialLookup())
+	return modelcatalog.ResolveAssistantChannelModel(snapshot, modelKey, nil)
 }
 
 func findAssistantChannel(channels []assistantChannel, channelID, modelID string) (assistantChannel, bool) {
@@ -99,12 +78,6 @@ func channelModelProtocol(channel assistantChannel, modelID string) (string, boo
 }
 
 func assistantChannelName(channel assistantChannel) string {
-	if name := modelcatalog.AssistantChannelName(channel); name != "" && name != channel.ID {
-		return name
-	}
-	if channel.ID == beefapi.ChannelID {
-		return "BeefAPI"
-	}
 	return modelcatalog.AssistantChannelName(channel)
 }
 

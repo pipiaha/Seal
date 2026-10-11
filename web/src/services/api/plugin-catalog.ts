@@ -1,5 +1,6 @@
 import { http } from "@/services/api/request";
 import type { ModelProtocolDefinition, ProtocolCapability } from "@/lib/model-protocols";
+import { CONFIGURED_PROTOCOLS } from "@/lib/configured-provider";
 
 type PluginProviderCatalogItem = {
     id: string;
@@ -27,13 +28,14 @@ type PluginProviderCatalogItem = {
 export async function fetchPluginProviderCatalog(scope: string, capability?: ProtocolCapability) {
     try {
         const result = await http.get<{ providers: PluginProviderCatalogItem[] }>("/plugins/catalog", { params: { scope, capability } });
-        return result.providers.filter((item) => item.enabled && !item.unavailableReason).map(toProviderDefinition);
+        const configured = scope === "user.custom-channel" ? CONFIGURED_PROTOCOLS.filter(item => !capability || item.capability === capability) : [];
+        return [...result.providers.filter((item) => item.enabled && !item.unavailableReason).map(toProviderDefinition), ...configured];
     } catch (error) {
         // The local desktop profile can run without the optional plugin center.
         // Keep the built-in OpenAI-compatible protocols available so a custom
         // channel remains usable even when protocol metadata is unavailable.
         if (scope === "user.custom-channel") {
-            const fallback = BUILTIN_OPENAI_PROTOCOLS.filter((item) => !capability || item.capability === capability);
+            const fallback = [...BUILTIN_OPENAI_PROTOCOLS, ...CONFIGURED_PROTOCOLS].filter((item) => !capability || item.capability === capability);
             if (fallback.length) return fallback;
         }
         throw error;

@@ -21,6 +21,7 @@ export async function testChannelModelConnection(channel: ModelChannel, model: s
         models: channel.models.includes(model) ? channel.models : [...channel.models, model],
         modelProfiles: [
             {
+                ...modelProfile,
                 model,
                 displayName: modelProfile?.displayName,
                 capability,

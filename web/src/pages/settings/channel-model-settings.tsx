@@ -12,10 +12,12 @@ import { defaultProtocolForCapability, defaultProtocolForModel, inferProtocolCap
 import { fetchPluginProviderCatalog } from "@/services/api/plugin-catalog";
 import { modelOptionName, type ModelChannel } from "@/stores/use-config-store";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores/use-model-connection-tests";
+import { defaultCustomProvider } from "@/lib/configured-provider";
+import { ConfiguredProviderEditor } from "./configured-provider-editor";
 
 type ModelProfile = NonNullable<ModelChannel["modelProfiles"]>[number];
 
-export function ChannelModelSettings({ channel, onChange, draft = false }: { channel: ModelChannel; onChange: (profiles: ModelProfile[]) => void; draft?: boolean }) {
+export function ChannelModelSettings({ channel, onChange, draft = false, capabilitiesOnly = false }: { channel: ModelChannel; onChange: (profiles: ModelProfile[]) => void; draft?: boolean; capabilitiesOnly?: boolean }) {
     const { message } = App.useApp();
     const [testingModel, setTestingModel] = useState("");
     const [editorTab, setEditorTab] = useState("protocol");
@@ -71,6 +73,7 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
 
     return (
         <div className="mt-4">
+            {capabilitiesOnly ? <Button size="small" icon={<Settings2 className="size-4" />} onClick={() => { setEditorTab("capabilities"); setActiveModel(channel.models[0]); }}>生成参数与连接测试</Button> : <>
             <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
                     <div className="text-xs font-medium">模型能力与请求协议</div>
@@ -110,10 +113,11 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                     );
                 })}
             </div>
+            </>}
             <ModelEditorModal
                 open={Boolean(activeModel)}
                 busy={Boolean(testingModel)}
-                title="编辑模型使用配置"
+                title={capabilitiesOnly ? "生成参数与连接测试" : "编辑模型使用配置"}
                 subtitle={activeModel || ""}
                 activeKey={editorTab}
                 onTabChange={setEditorTab}
@@ -167,9 +171,11 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                                     protocols={availableProtocols}
                                     onChange={(nextProtocol) => updateProfile(activeModel, {
                                         protocol: nextProtocol,
+                                        ...(nextProtocol.startsWith("custom-") ? { customProvider: activeModelProfile?.customProvider || defaultCustomProvider(activeCapability === "video" ? "video" : "image") } : {}),
                                         capabilityConfig: nextProtocol === activeProtocol ? activeModelProfile?.capabilityConfig : activeCapability === "image" || activeCapability === "video" ? defaultModelCapabilityConfig(nextProtocol, activeModel) : undefined,
                                     })}
                                 />
+                                {activeModelProfile && <ConfiguredProviderEditor key={`${activeModel}:${activeProtocol}`} channel={channel} profile={activeModelProfile} onChange={patch => updateProfile(activeModel, patch)} />}
                             </section>
                         </div>,
                     },
@@ -189,7 +195,7 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                             ) : <p className="text-xs text-foreground/50">当前模型类型无需额外配置引用与参数。</p>}
                         </div>,
                     },
-                ] : []}
+                ].filter(item => !capabilitiesOnly || item.key === "capabilities") : []}
             />
         </div>
     );

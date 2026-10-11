@@ -1,25 +1,19 @@
 import { Alert, App, Button, Popconfirm, Switch, Tooltip } from "antd";
 import { Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 
-import { ModelEditorModal } from "@/components/model-editor-modal";
 import { validateChannelHeaders } from "@/components/channel-headers-editor";
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { mergeFetchedChannelModelProfiles } from "@/lib/channel-model-catalog";
-import { channelModelsForCapability, mergeCategoryModelProfiles } from "@/lib/model-channel-settings";
+import { channelModelsForCapability } from "@/lib/model-channel-settings";
 import { ensureModelProfilesWithUiDefaults } from "@/lib/model-protocols";
 import { fetchChannelModels, type ChannelModelFetchResult } from "@/services/api/image";
-import { channelHasGenerationCredential, channelHasManagedBeefAPICredential, filterModelsByCapability, isBuiltinBeefAPIChannel, modelOptionsFromChannels, normalizeConfigSnapshot, useConfigStore, type AiConfig, type ModelChannel, type ModelCapability } from "@/stores/use-config-store";
-import { ChannelModelSettings } from "./channel-model-settings";
+import { channelHasGenerationCredential, filterModelsByCapability, modelOptionsFromChannels, useConfigStore, type AiConfig, type ModelChannel, type ModelCapability } from "@/stores/use-config-store";
 import { ModelServiceEditor } from "./model-service-editor";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores/use-model-connection-tests";
 import { ModelLogo } from "@/components/model-logo";
 import { MODEL_SERVICE_PRESETS, servicePresetFor, serviceSupportsModelCatalog } from "@/lib/model-service-presets";
-import { workspaceCapabilities } from "@/services/workspace-mode";
-import { localWorkspaceConfig } from "@/lib/user-session";
-import { getLocalModelConfig } from "@/services/api/workspace";
 import { flushModelConfig, getModelConfigPersistenceState, subscribeModelConfigPersistence, type ModelConfigPersistenceState } from "@/services/model-config-repository";
-import { beefAPIConnectionLabel, cancelBeefAPIConnection, disconnectBeefAPIConnection, getBeefAPIConnection, startBeefAPIConnection, type BeefAPIConnectionSummary } from "@/services/api/beefapi-connection";
 
 type UserChannelConnection = "openai" | "gemini";
 type ChannelSettingsPaneProps = {
@@ -32,88 +26,11 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
     const { message } = App.useApp();
     const config = useConfigStore((state) => state.config);
     const replaceConfig = useConfigStore((state) => state.replaceConfig);
-    const localMode = workspaceCapabilities().local;
     const persistence = useSyncExternalStore(subscribeModelConfigPersistence, getModelConfigPersistenceState, getModelConfigPersistenceState);
     const [loadingChannelIds, setLoadingChannelIds] = useState<string[]>([]);
-    const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
     const [serviceEditor, setServiceEditor] = useState<ModelChannel | null | undefined>(undefined);
-    const [beefConnection, setBeefConnection] = useState<BeefAPIConnectionSummary | null>(null);
-    const [beefBusy, setBeefBusy] = useState(false);
-    const appliedConnectionState = useRef<string | undefined>(undefined);
-    const catalogSync = useRef<{ state: string; selection: string; adopt: boolean } | null>(null);
-    const [catalogSyncFailed, setCatalogSyncFailed] = useState(false);
-
-    const applyBeefConnection = async (summary: BeefAPIConnectionSummary, previousState = beefConnection?.state) => {
-        setBeefConnection(summary);
-        const retry = catalogSync.current?.state === summary.state ? catalogSync.current : null;
-        if (appliedConnectionState.current === summary.state && !retry) return;
-        appliedConnectionState.current = summary.state;
-        if (!retry && !shouldRefreshBeefAPICatalog(previousState, summary.state)) {
-            catalogSync.current = null;
-            setCatalogSyncFailed(false);
-            return;
-        }
-        const intent = retry || { state: summary.state, selection: useConfigStore.getState().config.assistantModel, adopt: summary.state === "connected" && Boolean(previousState && previousState !== "connected") };
-        catalogSync.current = intent;
-        try {
-            const result = await getLocalModelConfig();
-            if (catalogSync.current !== intent) return;
-            const current = useConfigStore.getState().config;
-            replaceConfig(localWorkspaceConfig(normalizeConfigSnapshot({
-                config: mergeManagedBeefAPICatalog(current, result.config, intent.adopt && current.assistantModel === intent.selection),
-            }).config));
-            catalogSync.current = null;
-            setCatalogSyncFailed(false);
-        } catch {
-            if (catalogSync.current === intent) setCatalogSyncFailed(true);
-            // Keep the connection status even if the catalog refresh fails.
-        }
-    };
-
-    useEffect(() => {
-        if (!config.channels.some(isBuiltinBeefAPIChannel)) return;
-        let cancelled = false;
-        void getBeefAPIConnection()
-            .then((summary) => {
-                if (!cancelled) void applyBeefConnection(summary, undefined);
-            })
-            .catch(() => undefined);
-        return () => {
-            cancelled = true;
-        };
-    }, [config.channels.some(isBuiltinBeefAPIChannel)]);
-
-    useEffect(() => {
-        if (beefConnection?.state !== "pending") return;
-        const timer = window.setInterval(() => {
-            void getBeefAPIConnection()
-                .then((summary) => applyBeefConnection(summary, "pending"))
-                .catch(() => undefined);
-        }, 2000);
-        return () => window.clearInterval(timer);
-    }, [beefConnection?.state]);
-
-    const runBeefAction = async (action: () => Promise<BeefAPIConnectionSummary>, fallback: string) => {
-        setBeefBusy(true);
-        const previousState = beefConnection?.state;
-        try {
-            const summary = await action();
-            await applyBeefConnection(summary, previousState);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : fallback);
-        } finally {
-            setBeefBusy(false);
-        }
-    };
-    const retryBeefConnection = async () => {
-        const state = beefConnection?.state;
-        if (state === "expired" || state === "revoked" || state === "rejected") {
-            await disconnectBeefAPIConnection();
-        }
-        return startBeefAPIConnection();
-    };
     const userChannels = config.channels.filter((channel) => channel.scope !== "system");
-    const visibleChannels = userChannels.filter((channel) => channelModelsForCapability(channel, capability).length || (!channel.models.length && !isBuiltinBeefAPIChannel(channel) && capability === "text"));
+    const visibleChannels = userChannels.filter((channel) => channelModelsForCapability(channel, capability).length || (!channel.models.length && capability === "text"));
     const categoryLabel = { text: "文字", image: "图片", video: "视频", audio: "配音" }[capability];
     const runningHubReady = Boolean(config.runningHub.enabled && config.runningHub.baseUrl.trim() && config.runningHub.apiKey.trim() && config.runningHub.workflowId.trim());
 
@@ -159,9 +76,7 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
         message.success("模型服务已保存，可在创作页选择模型");
     };
 
-    const closeChannelEditor = () => {
-        setEditingChannelId(null);
-    };
+
 
     const deleteChannel = (id: string) => {
         const channel = config.channels.find((item) => item.id === id);
@@ -178,7 +93,7 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
 
     const refreshChannelModels = async (channel: ModelChannel) => {
         if (!serviceSupportsModelCatalog(channel, capability)) return;
-        const connectionError = channelConnectionError(channel, isBuiltinBeefAPIChannel(channel) ? beefConnection : null);
+        const connectionError = channelConnectionError(channel);
         if (connectionError) {
             message.error(`${channel.name || "当前渠道"}：${connectionError}`);
             return;
@@ -210,10 +125,10 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
     };
 
     const refreshAllModels = async () => {
-        const runnable = visibleChannels.filter((channel) => channel.enabled !== false && serviceSupportsModelCatalog(channel, capability) && !channelConnectionError(channel, isBuiltinBeefAPIChannel(channel) ? beefConnection : null));
-        const skipped = visibleChannels.filter((channel) => channel.enabled !== false && channelConnectionError(channel, isBuiltinBeefAPIChannel(channel) ? beefConnection : null));
+        const runnable = visibleChannels.filter((channel) => channel.enabled !== false && serviceSupportsModelCatalog(channel, capability) && !channelConnectionError(channel));
+        const skipped = visibleChannels.filter((channel) => channel.enabled !== false && channelConnectionError(channel));
         if (!runnable.length) {
-            const detail = skipped.map((channel) => `${channel.name || "未命名渠道"}：${channelConnectionError(channel, isBuiltinBeefAPIChannel(channel) ? beefConnection : null)}`).join("；");
+            const detail = skipped.map((channel) => `${channel.name || "未命名渠道"}：${channelConnectionError(channel)}`).join("；");
             message.error(detail || "没有可拉取的个人模型渠道，请先填写有效 Base URL 和 API Key");
             return;
         }
@@ -253,7 +168,7 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
             const warnings = [
                 ...failed.map((item) => `${item.channel.name || "未命名渠道"}：${item.error || "未返回模型"}`),
                 ...stale.map((item) => `${item.channel.name || "未命名渠道"}：连接配置已改变，已忽略旧结果`),
-                ...skipped.map((channel) => `${channel.name || "未命名渠道"}：${channelConnectionError(channel, isBuiltinBeefAPIChannel(channel) ? beefConnection : null)}`),
+                ...skipped.map((channel) => `${channel.name || "未命名渠道"}：${channelConnectionError(channel)}`),
             ];
             if (warnings.length) message.warning(`${warnings.join("；")}。未更新的渠道已保留原有模型列表`);
         } catch (error) {
@@ -272,39 +187,28 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
                     <Button icon={<Plus size={15} />} onClick={addChannel}>添加渠道</Button>
                 </div>
             </header>
+            {config.modelSelectionRequired?.includes(`${capability}Model`) && <Alert className="mb-3" type="info" showIcon title="原内置渠道已移除" description="请配置渠道并重新选择默认模型。" />}
             {persistence.status === "error" && <Alert className="mb-3" type="error" showIcon title="配置尚未保存" description={persistence.error} action={<Button size="small" onClick={() => void flushModelConfig()}>重试保存</Button>} />}
             {visibleChannels.length ? <>
                 <div className="model-channel-table-head" aria-hidden="true"><span>渠道</span><span>模型数量</span><span>启用</span><span>操作</span></div>
                 <div className="model-channel-list">
                     {visibleChannels.map((channel) => {
-                        const builtin = isBuiltinBeefAPIChannel(channel);
                         const models = channelModelsForCapability(channel, capability);
                         const shared = channel.models.length > models.length;
                         return <section key={channel.id} className={`model-channel-row ${channel.enabled === false ? "is-disabled" : ""}`} aria-labelledby={`channel-${capability}-${channel.id}-title`}>
                             <div className="model-channel-info">
-                                <span className="model-channel-logo"><ModelLogo icon={builtin ? undefined : MODEL_SERVICE_PRESETS.find((preset) => preset.id === servicePresetFor(channel))?.icon} size={20} color /></span>
+                                <span className="model-channel-logo"><ModelLogo icon={MODEL_SERVICE_PRESETS.find((preset) => preset.id === servicePresetFor(channel))?.icon} size={20} color /></span>
                                 <div><h3 id={`channel-${capability}-${channel.id}-title`}>{channel.name || "未命名渠道"}</h3><p>{channelProtocolLabel(channel)} · {channelHostLabel(channel.baseUrl)}{shared ? " · 共享连接" : ""}</p></div>
                             </div>
-                            <div className="model-channel-model-count"><span>{models.length} 个模型</span>{channel.enabled === false ? <small>已停用</small> : <ChannelStatus channel={channel} persistence={persistence} connection={builtin ? beefConnection : null} />}</div>
+                            <div className="model-channel-model-count"><span>{models.length} 个模型</span>{channel.enabled === false ? <small>已停用</small> : <ChannelStatus channel={channel} persistence={persistence} />}</div>
                             <Tooltip title={shared ? "共享连接，启停会影响该渠道的所有模型类型" : undefined}>
                                 <Switch size="small" aria-label={`启用${channel.name || "未命名渠道"}`} checked={channel.enabled !== false} onChange={(enabled) => updateChannel(channel.id, { enabled })} />
                             </Tooltip>
                             <div className="model-channel-row-actions">
-                                <Button size="small" type="text" aria-label={`管理${channel.name || "未命名渠道"}`} onClick={() => builtin ? setEditingChannelId(channel.id) : setServiceEditor(channel)}>管理</Button>
-                                {!builtin && <Popconfirm title="删除这个渠道？" description={shared ? "这个共享连接的所有类型模型都会移除。" : "该渠道关联的模型选择会同时移除。"} okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteChannel(channel.id)}><Button size="small" type="text" danger aria-label={`删除${channel.name || "未命名渠道"}`} icon={<Trash2 size={14} />} /></Popconfirm>}
+                                <Button size="small" type="text" aria-label={`管理${channel.name || "未命名渠道"}`} onClick={() => setServiceEditor(channel)}>管理</Button>
+                                {<Popconfirm title="删除这个渠道？" description={shared ? "这个共享连接的所有类型模型都会移除。" : "该渠道关联的模型选择会同时移除。"} okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteChannel(channel.id)}><Button size="small" type="text" danger aria-label={`删除${channel.name || "未命名渠道"}`} icon={<Trash2 size={14} />} /></Popconfirm>}
                             </div>
-                            {builtin && editingChannelId === channel.id && <ModelEditorModal open title="管理账号渠道" subtitle={channel.name} busy={beefBusy} onClose={closeChannelEditor} footer={<div className="model-editor-footer"><span className="text-xs text-foreground/50">{localMode ? "更改保存到本地工作区" : "更改保存到渠道配置"}</span><Button onClick={closeChannelEditor} disabled={beefBusy}>完成</Button></div>}>
-                                <div className="model-editor-panel">
-                                    <section className="model-editor-section"><h2>账号连接</h2><p>{beefAPIConnectionLabel(beefConnection)}</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            <BeefAPIConnectionActions connection={beefConnection} busy={beefBusy} onConnect={() => void runBeefAction(startBeefAPIConnection, "无法开始连接")} onCancel={() => void runBeefAction(cancelBeefAPIConnection, "无法取消连接")} onRetry={() => void runBeefAction(retryBeefConnection, "无法重新连接")} onDisconnect={() => void runBeefAction(disconnectBeefAPIConnection, "无法断开连接")} />
-                                            <Button size="small" disabled={beefConnection?.state !== "connected" || loadingChannelIds.includes("all")} loading={loadingChannelIds.includes(channel.id)} onClick={() => void refreshChannelModels(channel)}>读取模型</Button>
-                                            {catalogSyncFailed && <Button size="small" loading={beefBusy} onClick={() => void runBeefAction(getBeefAPIConnection, "无法更新模型列表")}>重试更新目录</Button>}
-                                        </div>
-                                    </section>
-                                    <ChannelModelSettings channel={{ ...channel, models }} onChange={(profiles) => updateChannel(channel.id, { modelProfiles: mergeCategoryModelProfiles(channel, profiles) })} />
-                                </div>
-                            </ModelEditorModal>}
+
                         </section>;
                     })}
                 </div>
@@ -317,7 +221,6 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
 
 export function applyFetchedChannelModelCatalog(channel: ModelChannel, result: ChannelModelFetchResult): ModelChannel {
     const profiles = mergeFetchedChannelModelProfiles(channel, result.catalog);
-    if (channel.id === "beefapi") return { ...channel, models: uniqueModels(result.models), modelProfiles: profiles };
     const existing = new Map((channel.modelProfiles || []).map((profile) => [profile.model, profile]));
     // Refresh updates the catalog without silently enabling new models or removing manual ones.
     return { ...channel, models: channel.models.length ? channel.models : uniqueModels(result.models), modelProfiles: profiles.map((profile) => existing.get(profile.model) || profile).concat((channel.modelProfiles || []).filter((profile) => !profiles.some((item) => item.model === profile.model))) };
@@ -346,8 +249,8 @@ function WorkflowChannelEntry({ icon, title, description, status, ready, onOpen 
     );
 }
 
-export function channelValidationError(channel: ModelChannel, connection?: BeefAPIConnectionSummary | null) {
-    return channelConnectionError(channel, connection) || validateChannelHeaders(channel.headers) || (!channel.models.length ? "请添加至少一个模型" : "");
+export function channelValidationError(channel: ModelChannel, _connection?: unknown) {
+    return channelConnectionError(channel) || validateChannelHeaders(channel.headers) || (!channel.models.length ? "请添加至少一个模型" : "");
 }
 
 export function isChannelReady(channel: ModelChannel) {
@@ -364,67 +267,23 @@ export function focusInvalidChannelField(channel: ModelChannel) {
     });
 }
 
-function ChannelStatus({ channel, persistence, connection }: { channel: ModelChannel; persistence: ModelConfigPersistenceState; connection?: BeefAPIConnectionSummary | null }) {
+function ChannelStatus({ channel, persistence }: { channel: ModelChannel; persistence: ModelConfigPersistenceState }) {
     const receipts = useModelConnectionTests((state) => state.receipts);
     const tested = channel.models.map((model) => currentModelConnectionReceipt(receipts, channel, model));
     const passed = tested.filter((result) => result?.success).length;
     const failed = tested.filter((result) => result && !result.success).length;
-    const error = channelValidationError(channel, connection);
-    const label = modelConfigChannelStatusLabel(channel, persistence, connection);
+    const error = channelValidationError(channel);
+    const label = modelConfigChannelStatusLabel(channel, persistence);
     const testLabel = failed ? `${failed} 个模型测试失败` : passed ? `${passed}/${channel.models.length} 个模型测试通过` : label;
     return (
         <span className={`settings-channel-status ${error || failed ? "is-warning" : "is-ready"}`}>
             <i aria-hidden="true" />
-            {isBuiltinBeefAPIChannel(channel) ? label : error || (persistence.status === "saving" || persistence.status === "error" ? label : testLabel)}
+            {error || (persistence.status === "saving" || persistence.status === "error" ? label : testLabel)}
         </span>
     );
 }
 
-export function shouldRefreshBeefAPICatalog(previous: string | undefined, next: string) {
-    if (next === "connected" && previous !== "connected") return true;
-    return next === "disconnected" && Boolean(previous) && previous !== "disconnected";
-}
-
-export function mergeManagedBeefAPICatalog(current: AiConfig, server: AiConfig, adoptAuthorizedAssistant = false): AiConfig {
-    const serverBeef = server.channels.find((channel) => channel.id === "beefapi");
-    let found = false;
-    const channels = current.channels.map((channel) => {
-        if (channel.id !== "beefapi") return channel;
-        found = true;
-        if (!serverBeef) {
-            return { ...channel, models: [], modelProfiles: [], apiKey: "", secretKey: "", credentialRef: undefined, hasApiKey: false, hasSecretKey: false };
-        }
-        return {
-            ...channel,
-            models: [...(serverBeef.models || [])],
-            modelProfiles: (serverBeef.modelProfiles || []).map((item) => ({ ...item })),
-            apiKey: "",
-            secretKey: "",
-            credentialRef: serverBeef.credentialRef,
-            hasApiKey: serverBeef.hasApiKey,
-            hasSecretKey: serverBeef.hasSecretKey,
-            baseUrl: serverBeef.baseUrl || channel.baseUrl,
-        };
-    });
-    if (serverBeef && !found) {
-        channels.unshift({
-            ...serverBeef,
-            apiKey: "",
-            secretKey: "",
-            models: [...(serverBeef.models || [])],
-            modelProfiles: (serverBeef.modelProfiles || []).map((item) => ({ ...item })),
-        });
-    }
-    return withChannels(adoptAuthorizedAssistant ? { ...current, assistantModel: server.assistantModel } : current, channels);
-}
-
-export function modelConfigChannelStatusLabel(channel: ModelChannel, persistence: ModelConfigPersistenceState, connection?: BeefAPIConnectionSummary | null) {
-    if (isBuiltinBeefAPIChannel(channel)) {
-        if (connection?.state === "connected") return beefAPIConnectionLabel(connection);
-        if (connection?.state && connection.state !== "disconnected") return beefAPIConnectionLabel(connection);
-        if (channelHasManagedBeefAPICredential(channel)) return "待确认连接";
-        return "未连接";
-    }
+export function modelConfigChannelStatusLabel(channel: ModelChannel, persistence: ModelConfigPersistenceState, _connection?: unknown) {
     if (!channelHasGenerationCredential(channel)) return "待配置";
     if (persistence.status === "saving") return "保存中";
     if (persistence.status === "error") return "保存失败";
@@ -432,77 +291,12 @@ export function modelConfigChannelStatusLabel(channel: ModelChannel, persistence
     return "尚未测试";
 }
 
-function BeefAPIConnectionActions({
-    connection,
-    busy,
-    onConnect,
-    onCancel,
-    onRetry,
-    onDisconnect,
-}: {
-    connection: BeefAPIConnectionSummary | null;
-    busy: boolean;
-    onConnect: () => void;
-    onCancel: () => void;
-    onRetry: () => void;
-    onDisconnect: () => void;
-}) {
-    const state = connection?.state || "disconnected";
-    const buttonClass = "h-10 sm:h-8";
-    if (state === "pending") {
-        return (
-            <>
-                <Button className={buttonClass} size="small" loading={busy} onClick={onCancel}>
-                    取消
-                </Button>
-            </>
-        );
-    }
-    if (state === "connected") {
-        return (
-            <>
-                <Button className={buttonClass} size="small" loading={busy} onClick={onDisconnect}>
-                    断开连接
-                </Button>
-            </>
-        );
-    }
-    if (state === "catalog_failed") {
-        return (
-            <>
-                <Button className={buttonClass} size="small" type="primary" loading={busy} onClick={onRetry}>
-                    重新连接
-                </Button>
-                <Button className={buttonClass} size="small" loading={busy} onClick={onDisconnect}>
-                    断开连接
-                </Button>
-            </>
-        );
-    }
-    if (state === "expired" || state === "revoked" || state === "rejected" || state === "store_error" || state === "cancelled") {
-        return (
-            <Button className={buttonClass} size="small" type="primary" loading={busy} onClick={onRetry}>
-                重新连接
-            </Button>
-        );
-    }
-    return (
-        <Button className={buttonClass} size="small" type="primary" loading={busy} onClick={onConnect}>
-            授权连接
-        </Button>
-    );
-}
-
 export function modelConfigChannelPresentation(channel: ModelChannel) {
-    const builtin = isBuiltinBeefAPIChannel(channel);
-    return {
-        builtin,
-        deletable: !builtin,
-        adapterLabel: builtin ? "应用内置适配" : "",
-    };
+    return { builtin: false, deletable: true, adapterLabel: "" };
 }
 
 function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
+	const selected = (field: string, value: string, options: string[]) => config.modelSelectionRequired?.includes(field) ? "" : normalizeDefaultModel(value, options);
     const models = modelOptionsFromChannels(channels);
     const imageModels = filterModelsByCapability(models, "image", channels);
     const videoModels = filterModelsByCapability(models, "video", channels);
@@ -519,10 +313,10 @@ function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
         videoModels,
         textModels,
         audioModels,
-        imageModel: normalizeDefaultModel(config.imageModel, imageModels),
-        videoModel: normalizeDefaultModel(config.videoModel, videoModels),
-        textModel: normalizeDefaultModel(config.textModel, textModels),
-        audioModel: normalizeDefaultModel(config.audioModel, audioModels),
+        imageModel: selected("imageModel", config.imageModel, imageModels),
+        videoModel: selected("videoModel", config.videoModel, videoModels),
+        textModel: selected("textModel", config.textModel, textModels),
+        audioModel: selected("audioModel", config.audioModel, audioModels),
     };
 }
 
@@ -544,7 +338,7 @@ function channelConnectionMode(channel: ModelChannel): UserChannelConnection {
     return channel.apiFormat === "gemini" ? "gemini" : "openai";
 }
 
-function channelConnectionError(channel: ModelChannel, connection?: BeefAPIConnectionSummary | null) {
+function channelConnectionError(channel: ModelChannel, _connection?: unknown) {
     const baseUrl = channel.baseUrl.trim();
     if (!baseUrl) return "请填写 Base URL";
     try {
@@ -552,10 +346,6 @@ function channelConnectionError(channel: ModelChannel, connection?: BeefAPIConne
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "Base URL 只支持 HTTP 或 HTTPS";
     } catch {
         return "Base URL 格式不正确";
-    }
-    if (isBuiltinBeefAPIChannel(channel)) {
-        if (connection?.state === "connected" || channelHasManagedBeefAPICredential(channel)) return "";
-        return "请先连接 BeefAPI";
     }
     if (!channelHasGenerationCredential(channel)) return "请填写 API Key / Access Key";
     if (requiresSecretKey(channel) && !channel.secretKey?.trim()) return "当前协议需要填写 Secret Key";

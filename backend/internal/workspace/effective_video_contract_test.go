@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestEffectiveConfigOverlaysStaleHostedSeedanceProfiles(t *testing.T) {
+func TestEffectiveConfigRemovesHostedProfilesAndPreservesCustomProfiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, LocalProviderConfigFile)
 	if err := os.WriteFile(path, staleHostedSeedanceConfig(), 0o600); err != nil {
@@ -32,24 +32,15 @@ func TestEffectiveConfigOverlaysStaleHostedSeedanceProfiles(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("effective overlay must not rewrite the on-disk snapshot")
 	}
-	if effective.Config["imageModel"] != "beefapi::gpt-image-2" || effective.Config["videoModel"] != "beefapi::wan3.0-video" {
-		t.Fatalf("user defaults changed: image=%#v video=%#v", effective.Config["imageModel"], effective.Config["videoModel"])
+	if effective.Config["imageModel"] != "" || effective.Config["videoModel"] != "" {
+		t.Fatal("retired defaults remain")
 	}
-
-	hosted := requireEffectiveChannel(t, effective, "beefapi")
-	for _, model := range []string{"seedance-2.0", "seedance-2.0-fast", "seedance-2.0-mini", "seedance-2.5"} {
-		profile := requireEffectiveProfile(t, hosted, model)
-		if profile["capability"] != "video" || profile["protocol"] != "newapi" {
-			t.Fatalf("hosted %s overlay = %#v", model, profile)
+	channels, _ := effective.Config["channels"].([]any)
+	for _, raw := range channels {
+		channel, _ := raw.(map[string]any)
+		if channel["id"] == "beefapi" {
+			t.Fatal("retired channel restored")
 		}
-	}
-	fast := requireEffectiveProfile(t, hosted, "seedance-2.0-fast")
-	if fast["displayName"] != "Seedance 2.0 Fast" {
-		t.Fatalf("upstream display name was dropped: %#v", fast)
-	}
-	image := requireEffectiveProfile(t, hosted, "gpt-image-2")
-	if image["capability"] != "image" || image["protocol"] != "openai-image" {
-		t.Fatalf("hosted image profile rewritten: %#v", image)
 	}
 
 	custom := requireEffectiveChannel(t, effective, "custom-gateway")

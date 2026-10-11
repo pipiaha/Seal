@@ -194,6 +194,7 @@ func (s *ProviderConfig) saveLocalModelConfig(body []byte, existingDocument Prov
 			return err
 		}
 	}
+	RemoveRetiredChannels(incoming)
 	document := newProviderState(incoming, existingDocument.Revision+1)
 	document.AssistantDefaultAuthorization = existingDocument.AssistantDefaultAuthorization
 	canonical, err := s.encodeStoredDocument(document)

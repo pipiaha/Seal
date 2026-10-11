@@ -9,6 +9,7 @@ import (
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/outbound"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/provider/workflow"
 )
 
@@ -47,6 +48,23 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 		return nil, errors.New("无法解析系统渠道配置")
 	}
 	applyCanvasTextStreaming(runtime.Call.TaskType, &input)
+	if err := ValidateConfiguredProvider(input.Mode, input.Config); err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(input.Config.InterfaceType, "comfyui-") {
+		return RunComfyUITask(ctx, input)
+	}
+	if strings.HasPrefix(input.Config.InterfaceType, "custom-") {
+		adapter, err := protocol.ConfiguredProvider(*input.Config.CustomProvider, protocol.Capability(input.Mode))
+		if err != nil {
+			return nil, err
+		}
+		registry, err := protocol.NewRegistry(adapter)
+		if err != nil {
+			return nil, err
+		}
+		ctx = WithProtocolRegistry(ctx, registry)
+	}
 
 	if workflow.IsProviderInterface(input.Config.InterfaceType) {
 		return executeWorkflow(ctx, runtime, userID, input)
@@ -142,6 +160,9 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 func dispatch(ctx context.Context, input Input) (map[string]any, error) {
 	switch input.Mode {
 	case "image":
+		if input.Config.CustomProvider != nil && input.Config.InterfaceType == "custom-image" {
+			return RunDeclarativeProtocolTask(ctx, input)
+		}
 		return RunImageTask(ctx, input)
 	case "text":
 		if input.AgentRequests != nil {
@@ -149,6 +170,9 @@ func dispatch(ctx context.Context, input Input) (map[string]any, error) {
 		}
 		return RunTextTask(ctx, input)
 	case "video":
+		if input.Config.CustomProvider != nil && input.Config.InterfaceType == "custom-video" {
+			return RunDeclarativeProtocolTask(ctx, input)
+		}
 		return RunVideoTask(ctx, input)
 	case "audio":
 		return RunAudioTask(ctx, input)
@@ -221,7 +245,11 @@ func validatePreparedInput(ctx context.Context, input Input) error {
 			return errors.New("后端任务队列暂不支持该 Gemini 调用格式，请选择已安装的 Gemini 协议插件")
 		}
 	}
-	if strings.TrimSpace(input.Config.BaseURL) == "" || strings.TrimSpace(input.Config.APIKey) == "" || strings.TrimSpace(input.Config.Model) == "" {
+	needsKey := input.Config.AuthType != "none"
+	if input.Config.CustomProvider != nil {
+		needsKey = input.Config.CustomProvider.Auth.Type != "none"
+	}
+	if strings.TrimSpace(input.Config.BaseURL) == "" || (needsKey && strings.TrimSpace(input.Config.APIKey) == "") || strings.TrimSpace(input.Config.Model) == "" {
 		return errors.New("后端生成任务缺少 Base URL、API Key 或模型名")
 	}
 	if err := validateInterfaceForContext(ctx, input.Mode, input.Config.InterfaceType); err != nil {

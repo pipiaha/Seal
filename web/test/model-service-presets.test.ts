@@ -15,8 +15,8 @@ const protocols = [
 
 test("supplier presets are category-specific and Bailian text does not use its native media endpoint", () => {
     expect(modelServicePresetsFor("text").map(p => p.name)).toContain("火山方舟");
-    expect(modelServicePresetsFor("image").filter(p => p.id !== "compatible").map(p => p.name)).toEqual(["OpenAI", "Google", "阿里百炼", "火山方舟"]);
-    expect(new Set(modelServicePresetsFor("video").filter(p => p.id !== "compatible").map(p => p.name))).toEqual(new Set(["火山方舟", "可灵", "MiniMax", "阿里百炼", "Google", "Vidu"]));
+    expect(modelServicePresetsFor("image").filter(p => p.id !== "compatible").map(p => p.name)).toEqual(["OpenAI", "Google", "阿里百炼", "火山方舟", "Agnes AI", "本地 ComfyUI"]);
+    expect(new Set(modelServicePresetsFor("video").filter(p => p.id !== "compatible").map(p => p.name))).toEqual(new Set(["火山方舟", "可灵", "MiniMax", "阿里百炼", "Google", "Vidu", "Agnes AI", "本地 ComfyUI"]));
     const bailian = modelServicePresetsFor("text").find(p => p.id === "bailian")!;
     expect(modelServicePresetConnection(bailian, "text").baseUrl).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1");
     expect(modelServicePresetConnection(bailian, "video").baseUrl).toBe("https://dashscope.aliyuncs.com");

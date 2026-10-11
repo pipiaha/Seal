@@ -1,6 +1,7 @@
 import { Button, Modal } from "antd";
 import { ImagePlus, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 
 import { CanvasImagePreview } from "@/components/canvas/canvas-image-preview";
 import { TaskDetailItem } from "./canvas-project-feedback";
@@ -36,6 +37,7 @@ type CanvasProjectStatusDialogsProps = {
 
 export function CanvasProjectStatusDialogs({ theme, task, taskLogs, taskLoading, taskError, superResolveNode, previewNode, clearConfirmOpen, onCloseTask, onCancelTask, onRetrieveTask, retrievingTaskId, onCloseSuperResolve, onUseLocalUpscale, onClosePreview, onCancelClear, onConfirmClear }: CanvasProjectStatusDialogsProps) {
     const config = useEffectiveConfig();
+    const navigate = useNavigate();
     const previewSource = useResolvedPreviewSource(previewNode);
     return (
         <>
@@ -43,10 +45,12 @@ export function CanvasProjectStatusDialogs({ theme, task, taskLogs, taskLoading,
                 {task ? (
                     <div className="space-y-4 text-sm">
                         {taskError ? <p role="status">任务详情暂时无法刷新，正在重试。</p> : null}
+                        {["canvas_image", "canvas_video", "canvas_audio"].includes(task.type) && <Button onClick={() => { onCloseTask(); navigate(`/call-logs?taskId=${encodeURIComponent(task.id)}`); }}>查看调用日志</Button>}
                         <div className="grid grid-cols-2 gap-3 rounded-lg border p-3" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>
                             <TaskDetailItem label="当前阶段" value={generationTaskStageLabel(task)} />
                             {generationTaskShowsProgress(task) ? <TaskDetailItem label="进度" value={`${task.progress ?? 0}%`} /> : null}
                             <TaskDetailItem label="模型" value={task.model ? modelDisplayName(config, task.model) : "默认模型"} />
+                            <TaskProviderSource inputJson={task.inputJson} />
                             <TaskDetailItem label="任务 ID" value={task.id} />
                             <TaskDetailItem label="创建时间" value={formatTaskTime(task.createdAt)} />
                             <TaskDetailItem label="开始时间" value={formatTaskTime(task.startedAt)} />
@@ -167,6 +171,14 @@ function useResolvedPreviewSource(node: CanvasNodeData | null) {
         return () => { cancelled = true; };
     }, [node]);
     return source;
+}
+
+function TaskProviderSource({ inputJson }: { inputJson?: string }) {
+    try {
+        const source = JSON.parse(inputJson || "{}").providerSource;
+        if (!source || typeof source !== "object") return null;
+        return <><TaskDetailItem label="实际渠道" value={String(source.sourceChannelName || "自定义服务")} /><TaskDetailItem label="请求服务" value={String(source.host || "未记录")} /><TaskDetailItem label="请求协议" value={String(source.interfaceType || "未记录")} /></>;
+    } catch { return null; }
 }
 
 function TaskGenerationParameters({ inputJson, theme }: { inputJson?: string; theme: CanvasProjectStatusDialogsProps["theme"] }) {

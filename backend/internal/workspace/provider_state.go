@@ -61,6 +61,7 @@ func mergeBuiltinProviderPresets(config map[string]any) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
+	RemoveRetiredChannels(result)
 	channels := map[string]map[string]any{}
 	order := make([]string, 0)
 	if rawChannels, ok := result["channels"].([]any); ok {

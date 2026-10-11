@@ -8,6 +8,7 @@ import (
 
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
+	"infinite-canvas/backend/internal/platform"
 
 	"gorm.io/gorm"
 )
@@ -261,6 +262,10 @@ func (s *Service) DeleteSystemChannel(actor *model.User, id string) error {
 }
 
 func (s *Service) LogAPICall(log model.ApiCallLog) error {
+	log.UpstreamURL = platform.SanitizeAPICallURL(log.UpstreamURL)
+	log.RequestBody = platform.SanitizeAPICallPayload([]byte(log.RequestBody), log.RequestContentType)
+	log.ResponseBody = platform.SanitizeAPICallPayload([]byte(log.ResponseBody), "")
+	log.Error = platform.SanitizeAPICallText(log.Error)
 	if log.ID == "" {
 		log.ID = newID()
 	}
@@ -295,11 +300,6 @@ func (s *Service) LogAPICall(log model.ApiCallLog) error {
 			stdlog.Printf("provider task state update failed: task_id=%s provider_request_id=%s error=%v", log.TaskID, log.ProviderRequestID, err)
 		}
 	}
-	if merged, err := s.mergeVideoAPICallLog(log); err != nil {
-		return err
-	} else if merged {
-		return nil
-	}
 	policy, err := s.RuntimePolicy()
 	if err != nil {
 		return err
@@ -315,58 +315,6 @@ func (s *Service) LogAPICall(log model.ApiCallLog) error {
 		return err
 	}
 	return s.repo.Create(&log)
-}
-
-func (s *Service) mergeVideoAPICallLog(log model.ApiCallLog) (bool, error) {
-	if log.Capability != "video" || (log.RequestKind != "poll" && log.RequestKind != "download") {
-		return false, nil
-	}
-	if log.TaskID == "" && log.ProviderRequestID == "" {
-		return false, nil
-	}
-	root, err := s.repo.VideoAPICallRoot(log)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if log.RequestKind == "poll" {
-		root.PollCount++
-		if log.ResponseBody != "" {
-			root.ResponseBody = log.ResponseBody
-		}
-	}
-	if log.ProviderRequestID != "" {
-		root.ProviderRequestID = log.ProviderRequestID
-	}
-	if log.ProviderStatus != "" {
-		root.ProviderStatus = log.ProviderStatus
-	}
-	startedAt := root.StartedAt
-	if startedAt.IsZero() {
-		startedAt = root.CreatedAt.Add(-time.Duration(root.DurationMs) * time.Millisecond)
-		root.StartedAt = startedAt
-	}
-	root.DurationMs = max(root.DurationMs, log.CreatedAt.Sub(startedAt).Milliseconds())
-	root.StatusCode = log.StatusCode
-	root.ConcurrencyLimit = log.ConcurrencyLimit
-	if log.Status == model.ApiCallStatusFailed {
-		root.Status = log.Status
-		root.ErrorCode = log.ErrorCode
-		root.Error = log.Error
-	} else {
-		root.Status = model.ApiCallStatusSucceeded
-		root.ErrorCode = ""
-		root.Error = ""
-	}
-	if log.UsageAvailable {
-		root.UsageAvailable = true
-		root.InputTokens = log.InputTokens
-		root.OutputTokens = log.OutputTokens
-		root.CachedTokens = log.CachedTokens
-	}
-	return true, s.repo.Save(root)
 }
 
 func (s *Service) APICallLogs(actor *model.User, limit int) ([]model.ApiCallLog, error) {

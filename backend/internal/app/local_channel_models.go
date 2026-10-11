@@ -1,7 +1,6 @@
 package app
 
 import (
-	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/modelcatalog"
 )
 
@@ -31,9 +30,6 @@ func (s *Service) localChannelModelListItems(intent *ModelRequestIntent) []map[s
 	items := []map[string]any{}
 	for _, item := range modelcatalog.FilterLocalChannelModels(s.localChannelModels(), intent) {
 		selection := map[string]any{"channelId": item.ChannelID, "channelModelKey": item.Model}
-		if item.ChannelID == beefapi.ChannelID {
-			selection["credentialRef"] = managedBeefAPIRef
-		}
 		entry := map[string]any{"name": item.DisplayName, "capability": item.Capability, "selection": selection}
 		if item.CapabilityConfig != nil {
 			entry["options"] = item.CapabilityConfig

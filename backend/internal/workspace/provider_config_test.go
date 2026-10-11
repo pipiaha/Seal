@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestProviderConfigMigratesLegacyBeefAPIStateWithoutLosingLocalChoices(t *testing.T) {
+func TestProviderConfigRetiresLegacyBeefAPIState(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{
         "channels":[{"id":"beefapi","name":"BeefAPI old","baseUrl":"https://old.invalid","apiKey":"local-secret","headers":[{"name":"X-Site","value":"desktop"}],"enabled":false,"models":["legacy-model"],"modelProfiles":[{"model":"seedance-2.0-fast","protocol":"newapi-channel-1","capability":"video"}]}],
@@ -34,33 +34,19 @@ func TestProviderConfigMigratesLegacyBeefAPIStateWithoutLosingLocalChoices(t *te
 	if health != ConfigHealthMigrated {
 		t.Fatalf("health = %q", health)
 	}
-	channel := requireEffectiveChannel(t, effective, "beefapi")
-	if channel["name"] != "BeefAPI" || channel["baseUrl"] != "https://enterprise.beefapi.com" {
-		t.Fatal("preset-owned identity was not repaired")
+	channels, _ := effective.Config["channels"].([]any)
+	if len(channels) != 0 {
+		t.Fatalf("retired channels remain: %#v", channels)
 	}
-	if channel["apiKey"] != "local-secret" || channel["enabled"] != false {
-		t.Fatal("local channel state was not preserved")
-	}
-	headers, _ := channel["headers"].([]any)
-	if len(headers) != 1 {
-		t.Fatalf("local headers were not preserved: %#v", channel["headers"])
-	}
-	profiles, _ := channel["modelProfiles"].([]any)
-	if len(profiles) != 1 {
-		t.Fatalf("fetched model profiles were not preserved: %#v", profiles)
-	}
-	models, _ := channel["models"].([]string)
-	if len(models) != 1 || models[0] != "legacy-model" {
-		t.Fatalf("fetched model catalog was not preserved: %#v", models)
-	}
-	for key, want := range map[string]string{
-		"imageModel": "beefapi::gpt-image-2", "videoModel": "beefapi::seedance-2.0-fast",
-		"textModel": "beefapi::gpt-5.6-sol", "audioModel": "beefapi::minimax-music-v3.0",
-	} {
-		if effective.Config[key] != want {
-			t.Fatalf("%s = %#v", key, effective.Config[key])
+	for _, field := range []string{"imageModel", "videoModel", "textModel", "audioModel"} {
+		if effective.Config[field] != "" {
+			t.Fatalf("retired default remains: %s=%#v", field, effective.Config[field])
 		}
 	}
+	if len(effective.Config["modelSelectionRequired"].([]any)) != 4 {
+		t.Fatal("explicit selection markers missing")
+	}
+
 }
 
 func TestProviderConfigDoesNotBindAProviderWhenLocalStateIsMissing(t *testing.T) {
@@ -87,10 +73,10 @@ func TestProviderConfigRecoversLastValidBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveLocalModelConfig([]byte(`{"channels":[{"id":"beefapi","apiKey":"first-secret","enabled":true}]}`)); err != nil {
+	if err := store.SaveLocalModelConfig([]byte(`{"channels":[{"id":"manual","apiKey":"first-secret","enabled":true}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveLocalModelConfig([]byte(`{"channels":[{"id":"beefapi","apiKey":"second-secret","enabled":true}]}`)); err != nil {
+	if err := store.SaveLocalModelConfig([]byte(`{"channels":[{"id":"manual","apiKey":"second-secret","enabled":true}]}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, LocalProviderConfigFile), []byte(`{"schemaVersion":`), 0o600); err != nil {
@@ -104,7 +90,7 @@ func TestProviderConfigRecoversLastValidBackup(t *testing.T) {
 	if health != ConfigHealthRecovered {
 		t.Fatalf("health = %q", health)
 	}
-	if got := requireEffectiveChannel(t, effective, "beefapi")["apiKey"]; got != "first-secret" {
+	if got := requireEffectiveChannel(t, effective, "manual")["apiKey"]; got != "first-secret" {
 		t.Fatal("recovered credential does not match the last valid backup")
 	}
 }

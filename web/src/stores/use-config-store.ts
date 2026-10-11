@@ -4,12 +4,12 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import { scopedLocalStorage } from "@/lib/user-scope";
-import { beefAPIVideoContract, isBeefAPIEndpoint } from "@/lib/beefapi-video-contracts";
 import { defaultProtocolForCapability, defaultProtocolForModel, modelProtocolCapability, normalizeModelProtocol, usesOpenAICompatibleProtocolDefault, type ModelProtocol } from "@/lib/model-protocols";
 import { normalizeVideoDuration, normalizeVideoResolution } from "@/lib/video-generation-options";
 import { defaultModelCapabilityConfig, workflowFieldRole, workflowFieldSafeToOverride, workflowVideoFieldsFromJson, type ModelCapabilityConfig } from "@/lib/model-capabilities";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
+import type { CustomProvider, ComfyWorkflow } from "@/lib/configured-provider";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
 export type ChannelInterfaceType = ModelProtocol;
@@ -353,6 +353,8 @@ export type ModelChannel = {
     referenceAssetOrigin?: string;
     apiKey: string;
     secretKey?: string;
+    authType?: "none" | "bearer" | "header";
+    authHeader?: string;
     headers?: ChannelHeader[];
     apiFormat: ApiCallFormat;
     interfaceType?: ChannelInterfaceType;
@@ -380,6 +382,8 @@ export type ModelChannel = {
         logicalCapabilitySpec?: CapabilitySpec;
         logicalCapabilityProfiles?: CapabilitySpec[];
         defaultOptions?: Record<string, unknown>;
+        customProvider?: CustomProvider;
+        comfyui?: ComfyWorkflow;
     }>;
 };
 
@@ -389,6 +393,7 @@ export type AiConfig = {
     apiKey: string;
     apiFormat: ApiCallFormat;
     channels: ModelChannel[];
+    modelSelectionRequired?: string[];
     runningHub: RunningHubConfig;
     /** 仅用于单次生成任务路由，不属于全局渠道启用状态。 */
     taskWorkflowProvider?: "model" | "runninghub";
@@ -606,11 +611,11 @@ export function isBuiltinBeefAPIChannel(channel: Pick<ModelChannel, "id" | "pinn
 
 export function channelHasManagedBeefAPICredential(channel: Pick<ModelChannel, "id" | "pinned" | "credentialRef" | "hasApiKey">) {
     if (!isBuiltinBeefAPIChannel(channel)) return false;
-    return channel.credentialRef === MANAGED_BEEFAPI_CREDENTIAL_REF || channel.hasApiKey === true;
+    return false;
 }
 
-export function channelHasGenerationCredential(channel: Pick<ModelChannel, "id" | "pinned" | "credentialRef" | "hasApiKey" | "apiKey">) {
-    return channelHasManagedBeefAPICredential(channel) || Boolean(channel.apiKey?.trim());
+export function channelHasGenerationCredential(channel: Pick<ModelChannel, "id" | "pinned" | "credentialRef" | "hasApiKey" | "apiKey" | "authType">) {
+    return channel.authType === "none" || Boolean(channel.apiKey?.trim() || channel.hasApiKey);
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
@@ -619,7 +624,7 @@ function isAiConfigReady(config: AiConfig, model: string) {
         return Boolean(config.runningHub.enabled && config.runningHub.baseUrl.trim() && key.trim() && config.runningHub.workflowId.trim());
     }
     const channel = resolveModelChannel(config, model);
-    return Boolean(model.trim() && channel.baseUrl.trim() && channelHasGenerationCredential(channel));
+    return Boolean(model.trim() && channel.enabled !== false && channel.models.includes(modelOptionName(model)) && channel.baseUrl.trim() && channelHasGenerationCredential(channel));
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -718,25 +723,42 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
     };
     const hasPersistedChannels = Array.isArray(persistedConfig.channels);
     if (!hasPersistedChannels) config.channels = [];
-    const channels = normalizeChannels(config, !hasPersistedChannels).map(enrichBeefApiMediaChannel);
+    const retiredIDs = new Set(["beefapi", ...(config.channels || []).filter(channel => channel.credentialRef === MANAGED_BEEFAPI_CREDENTIAL_REF).map(channel => channel.id)]);
+    const retiredModels = new Set((config.channels || []).filter(channel => retiredIDs.has(channel.id)).flatMap(channel => channel.models));
+    const keptModels = new Set((config.channels || []).filter(channel => !retiredIDs.has(channel.id)).flatMap(channel => channel.models));
+    try {
+        if (new URL(config.baseUrl).hostname.toLowerCase() === "enterprise.beefapi.com") { config.baseUrl = ""; config.apiKey = ""; }
+    } catch { /* Invalid legacy URLs cannot select a retired channel. */ }
+    const required = new Set(config.modelSelectionRequired || []);
+    const selectionFields = ["model", "imageModel", "videoModel", "textModel", "audioModel", "assistantModel"] as const;
+    for (const field of selectionFields) {
+        const value = config[field] || "";
+        const decoded = decodeChannelModel(value);
+        if (decoded && retiredIDs.has(decoded.channelId) || !decoded && retiredModels.has(value) && !keptModels.has(value)) { required.add(field); config[field] = ""; }
+        else if (value) required.delete(field);
+    }
+    config.channels = (config.channels || []).filter(channel => !retiredIDs.has(channel.id));
+    const channels = normalizeChannels(config, false);
+    const selected = (field: typeof selectionFields[number], value: string, options: string[]) => required.has(field) ? "" : normalizeSelectedModel(value, channels, options);
     const models = modelOptionsFromChannels(channels);
     const imageModels = filterModelsByCapability(models, "image", channels);
     const videoModels = filterModelsByCapability(models, "video", channels);
     const textModels = filterModelsByCapability(models, "text", channels);
     const audioModels = filterModelsByCapability(models, "audio", channels);
-    const model = normalizeSelectedModel(config.model || config.imageModel || config.textModel, channels, models);
+    const model = selected("model", config.model || config.imageModel || config.textModel, models);
     return {
         config: {
             ...config,
             channelMode: "remote" as const,
+            modelSelectionRequired: [...required],
             apiFormat: normalizeApiFormat(config.apiFormat),
             channels,
             models,
             model,
-            imageModel: normalizeSelectedModel(config.imageModel || model, channels, imageModels),
-            videoModel: normalizeSelectedModel(config.videoModel, channels, videoModels),
-            textModel: normalizeSelectedModel(config.textModel || model, channels, textModels),
-            audioModel: normalizeSelectedModel(config.audioModel || defaultConfig.audioModel, channels, audioModels),
+            imageModel: selected("imageModel", config.imageModel || model, imageModels),
+            videoModel: selected("videoModel", config.videoModel, videoModels),
+            textModel: selected("textModel", config.textModel || model, textModels),
+            audioModel: selected("audioModel", config.audioModel || defaultConfig.audioModel, audioModels),
             // 助手模型允许为空（跟随默认文本模型），因此这里只保证类型，
             // 协议与渠道有效性由 `lib/assistant-model` 在读取时裁决。
             assistantModel: typeof config.assistantModel === "string" ? config.assistantModel.trim() : "",
@@ -761,108 +783,6 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             audioModels,
         },
     };
-}
-
-function beefApiVideoProtocol(model: string, current?: ModelProtocol): ModelProtocol {
-    return (beefAPIVideoContract(model)?.protocol as ModelProtocol | undefined) || current || "newapi-channel-2";
-}
-
-function beefApiVideoCapabilityConfig(model: string, protocol: ModelProtocol, current?: ModelCapabilityConfig, sourced = false): ModelCapabilityConfig | undefined {
-    const profile = beefApiSeedanceCapabilityConfig(model, current, sourced);
-    if (sourced) return profile;
-    const contract = beefAPIVideoContract(model);
-    const limits = contract?.maxReferences;
-    if (!limits) return profile;
-    const resolved = profile || defaultModelCapabilityConfig(protocol, model);
-    if (!resolved.video) return resolved;
-    return { ...resolved, video: { ...resolved.video,
-        references: { ...resolved.video.references, maxImages: Math.min(resolved.video.references.maxImages, limits.image ?? Infinity), maxVideos: Math.min(resolved.video.references.maxVideos, limits.video ?? Infinity), maxAudios: Math.min(resolved.video.references.maxAudios, limits.audio ?? Infinity) },
-        operations: contract.operations || resolved.video.operations,
-        defaultOperation: contract.operations?.includes(resolved.video.defaultOperation) ? resolved.video.defaultOperation : contract.operations?.[0] || resolved.video.defaultOperation,
-    } };
-}
-
-function beefApiSeedanceCapabilityConfig(model: string, current?: ModelCapabilityConfig, sourced = false): ModelCapabilityConfig | undefined {
-    if (sourced) return current;
-    if (!/^seedance-2\.(?:0|5)(?:-|$)/i.test(model)) return current;
-    const video = current?.video;
-    const refs = video?.references;
-    // Older built-in profiles disabled all video/audio references on every
-    // hydration. Match that complete signature, not a user's individual limit.
-    const legacy = video?.operations?.length === 2 && video.operations.includes("text_to_video") && video.operations.includes("image_to_video") &&
-        refs?.maxImages === 9 && refs.maxVideos === 0 && refs.maxAudios === 0 &&
-        refs.maxVideoBytes === 200 * 1024 * 1024 && refs.maxAudioBytes === 15 * 1024 * 1024 &&
-        refs.maxVideoDurationSeconds === 0 && refs.maxAudioDurationSeconds === 0;
-    const defaults = defaultModelCapabilityConfig("newapi", model);
-    if (!current || !video) return defaults;
-    // The built-in BeefAPI Seedance contract supports the audio switch even
-    // when an older saved profile advertised no control. Keep its default.
-    const generateAudio = { ...video!.generateAudio, supported: true };
-    if (!legacy) return { ...current, video: { ...video!, generateAudio } };
-    const next = defaults.video!;
-    return { ...current, video: { ...video!, generateAudio, operations: next.operations, references: { ...refs!,
-        maxImages: next.references.maxImages,
-        maxVideos: next.references.maxVideos, maxAudios: next.references.maxAudios,
-        maxVideoDurationSeconds: next.references.maxVideoDurationSeconds,
-        maxAudioDurationSeconds: next.references.maxAudioDurationSeconds,
-    } } };
-}
-
-function enrichBeefApiMediaChannel(channel: ModelChannel): ModelChannel {
-    if (!isBeefAPIEndpoint(channel.baseUrl)) return channel;
-    const models = channel.models;
-    const existing = new Map((channel.modelProfiles || []).map((item) => [item.model, item]));
-    for (const model of models.filter(isImageModelName)) {
-        const current = existing.get(model);
-        existing.set(model, {
-            ...(current || {}),
-            model,
-            capability: "image",
-            protocol: current?.protocol || "openai-image",
-            capabilityConfig: current?.capabilityConfig || defaultModelCapabilityConfig("openai-image", model),
-        });
-    }
-    for (const model of models.filter(isTextModelName)) {
-        const current = existing.get(model);
-        if (current?.capability && current.capability !== "text") continue;
-        if (current?.protocol && modelProtocolCapability(current.protocol) !== "text") continue;
-        existing.set(model, {
-            ...(current || {}),
-            model,
-            capability: "text",
-            protocol: current?.protocol || "chat-completion",
-        });
-    }
-    for (const model of models.filter(isAudioModelName)) {
-        const current = existing.get(model);
-        if (current?.capability && current.capability !== "audio" && current.capability !== "text") continue;
-        existing.set(model, {
-            ...(current || {}),
-            model,
-            capability: "audio",
-            protocol: current?.protocol && current.capability === "audio" ? current.protocol : "openai-audio",
-        });
-    }
-    for (const model of models.filter(isTranscriptionModelName)) {
-        const current = existing.get(model);
-        if (!current) continue;
-        if (current.capability === "image" || current.capability === "video") continue;
-        existing.delete(model);
-    }
-    for (const model of models.filter(isVideoModelName)) {
-        const current = existing.get(model);
-        // Repair known routes using the shared contract; preserve catalog and
-        // custom protocols for models whose wire contract is not declared here.
-        const protocol = beefApiVideoProtocol(model, current?.protocol);
-        existing.set(model, {
-            ...(current || {}),
-            model,
-            capability: "video",
-            protocol,
-            capabilityConfig: beefApiVideoCapabilityConfig(model, protocol, current?.capabilityConfig, current?.videoCapabilitiesVersion !== undefined),
-        });
-    }
-    return { ...channel, models, modelProfiles: Array.from(existing.values()) };
 }
 
 function normalizeSelectedModel(value: string, channels: ModelChannel[], options: string[]) {
@@ -894,6 +814,8 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         referenceAssetOrigin: channel?.referenceAssetOrigin?.trim() || undefined,
         apiKey: channel?.apiKey || "",
         secretKey: channel?.secretKey || "",
+        authType: channel?.authType || "bearer",
+        authHeader: channel?.authHeader?.trim() || undefined,
         headers: Array.isArray(channel?.headers) ? channel.headers.map((header) => ({ name: String(header.name || ""), value: String(header.value || "") })) : [],
         apiFormat,
         interfaceType,
@@ -985,6 +907,7 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
     const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.includes(model));
+    if (decoded && !matched) return { ...createModelChannel({ id: decoded.channelId, name: "渠道已移除", enabled: false }), baseUrl: "", models: [] };
     return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName) });
 }
 
@@ -994,12 +917,17 @@ export function logicalModelIDForConfig(config: AiConfig) {
 }
 
 export function channelConnectionSignature(channel: ModelChannel) {
-    return [channel.baseUrl.trim(), channel.referenceAssetOrigin?.trim() || "", channel.apiKey.trim(), channel.secretKey?.trim() || "", channel.apiFormat, channel.interfaceType || "auto", JSON.stringify(channel.headers || [])].join("\n");
+    return [channel.baseUrl.trim(), channel.referenceAssetOrigin?.trim() || "", channel.apiKey.trim(), channel.secretKey?.trim() || "", channel.apiFormat, channel.interfaceType || "auto", channel.authType || "bearer", channel.authHeader || "", JSON.stringify(channel.headers || [])].join("\n");
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
+    const decoded = decodeChannelModel(value);
+    if (decoded && !config.channels.some(channel => channel.id === decoded.channelId && channel.enabled !== false)) {
+        throw new Error("所选模型渠道已移除或停用，请重新选择模型渠道");
+    }
     const channel = resolveModelChannel(config, value);
     const model = modelOptionName(value || config.model);
+    if (channel.enabled === false || (decoded && !channel.models.includes(model))) throw new Error("所选模型已移除或渠道已停用，请重新选择");
     const modelProfile = channel.modelProfiles?.find((item) => item.model === model);
     const modelProtocol = normalizeModelProtocol(modelProfile?.protocol);
     const interfaceType = modelProtocol
@@ -1015,10 +943,16 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         apiKey: channel.credentialRef ? "" : channel.apiKey,
         secretKey: channel.credentialRef ? "" : channel.secretKey,
         headers: channel.headers,
+        authType: channel.authType,
+        authHeader: channel.authHeader,
+        sourceChannelId: channel.id,
+        sourceChannelName: channel.name,
+        customProvider: modelProtocol?.startsWith("custom-") && modelProfile?.customProvider ? { ...modelProfile.customProvider, auth: { type: channel.authType || "bearer", field: "apiKey", header: channel.authHeader } } : undefined,
+        comfyui: modelProtocol?.startsWith("comfyui-") ? modelProfile?.comfyui : undefined,
         apiFormat: interfaceType ? (interfaceType === "gemini-veo" || interfaceType === "gemini-image" || interfaceType === "gemini-generate-content" ? ("gemini" as const) : interfaceType === "claude-api" ? ("claude" as const) : ("openai" as const)) : channel.apiFormat,
         interfaceType,
         channelId: channel.scope === "system" ? channel.id : "",
-        credentialRef: channel.credentialRef || (isBuiltinBeefAPIChannel(channel) ? MANAGED_BEEFAPI_CREDENTIAL_REF : undefined),
+        credentialRef: channel.credentialRef,
     };
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/outbound"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/provider/workflow"
 )
 
@@ -74,41 +75,48 @@ type TextMessage struct {
 }
 
 type Config struct {
-	ChannelID                string                    `json:"channelId"`
-	ChannelModelKey          string                    `json:"channelModelKey,omitempty"`
-	VariantID                string                    `json:"variantId,omitempty"`
-	ProviderModelKey         string                    `json:"providerModelKey,omitempty"`
-	APIFormat                string                    `json:"apiFormat"`
-	InterfaceType            string                    `json:"interfaceType"`
-	BaseURL                  string                    `json:"baseUrl"`
-	ReferenceAssetOrigin     string                    `json:"referenceAssetOrigin,omitempty"`
-	APIKey                   string                    `json:"apiKey"`
-	SecretKey                string                    `json:"secretKey"`
-	Headers                  []outbound.OutboundHeader `json:"headers"`
-	Model                    string                    `json:"model"`
-	Size                     string                    `json:"size"`
-	Quality                  string                    `json:"quality"`
-	TransparentBackground    string                    `json:"transparentBackground"`
-	Count                    string                    `json:"count"`
-	VideoSeconds             string                    `json:"videoSeconds"`
-	VQuality                 string                    `json:"vquality"`
-	VideoGenerateAudio       string                    `json:"videoGenerateAudio"`
-	VideoWatermark           string                    `json:"videoWatermark"`
-	ArkPrivateAssetUpload    string                    `json:"videoArkPrivateAssetUpload"`
-	AudioVoice               string                    `json:"audioVoice"`
-	AudioFormat              string                    `json:"audioFormat"`
-	AudioSpeed               string                    `json:"audioSpeed"`
-	AudioInstructions        string                    `json:"audioInstructions"`
-	SystemPrompt             string                    `json:"systemPrompt"`
-	CapabilityConfig         *ModelCapabilityConfig    `json:"capabilityConfig"`
-	VideoCapabilitiesVersion *string                   `json:"videoCapabilitiesVersion,omitempty"`
-	WorkflowID               string                    `json:"workflowId"`
-	WebappID                 string                    `json:"webappId"`
-	WorkflowJSON             map[string]interface{}    `json:"workflowJson"`
-	WorkflowFields           []WorkflowField           `json:"workflowFields"`
-	RunningHubUseWallet      bool                      `json:"runningHubUseWallet"`
-	RunningHubWalletKey      string                    `json:"runningHubWalletApiKey"`
-	RunningHubUploadKey      string                    `json:"runningHubUploadApiKey"`
+	SourceChannelID          string                     `json:"sourceChannelId,omitempty"`
+	SourceChannelName        string                     `json:"sourceChannelName,omitempty"`
+	AuthType                 string                     `json:"authType,omitempty"`
+	AuthHeader               string                     `json:"authHeader,omitempty"`
+	CustomProvider           *protocol.ManifestProvider `json:"customProvider,omitempty"`
+	ComfyUI                  *ComfyWorkflow             `json:"comfyui,omitempty"`
+	ChannelID                string                     `json:"channelId"`
+	CredentialRef            string                     `json:"credentialRef,omitempty"`
+	ChannelModelKey          string                     `json:"channelModelKey,omitempty"`
+	VariantID                string                     `json:"variantId,omitempty"`
+	ProviderModelKey         string                     `json:"providerModelKey,omitempty"`
+	APIFormat                string                     `json:"apiFormat"`
+	InterfaceType            string                     `json:"interfaceType"`
+	BaseURL                  string                     `json:"baseUrl"`
+	ReferenceAssetOrigin     string                     `json:"referenceAssetOrigin,omitempty"`
+	APIKey                   string                     `json:"apiKey"`
+	SecretKey                string                     `json:"secretKey"`
+	Headers                  []outbound.OutboundHeader  `json:"headers"`
+	Model                    string                     `json:"model"`
+	Size                     string                     `json:"size"`
+	Quality                  string                     `json:"quality"`
+	TransparentBackground    string                     `json:"transparentBackground"`
+	Count                    string                     `json:"count"`
+	VideoSeconds             string                     `json:"videoSeconds"`
+	VQuality                 string                     `json:"vquality"`
+	VideoGenerateAudio       string                     `json:"videoGenerateAudio"`
+	VideoWatermark           string                     `json:"videoWatermark"`
+	ArkPrivateAssetUpload    string                     `json:"videoArkPrivateAssetUpload"`
+	AudioVoice               string                     `json:"audioVoice"`
+	AudioFormat              string                     `json:"audioFormat"`
+	AudioSpeed               string                     `json:"audioSpeed"`
+	AudioInstructions        string                     `json:"audioInstructions"`
+	SystemPrompt             string                     `json:"systemPrompt"`
+	CapabilityConfig         *ModelCapabilityConfig     `json:"capabilityConfig"`
+	VideoCapabilitiesVersion *string                    `json:"videoCapabilitiesVersion,omitempty"`
+	WorkflowID               string                     `json:"workflowId"`
+	WebappID                 string                     `json:"webappId"`
+	WorkflowJSON             map[string]interface{}     `json:"workflowJson"`
+	WorkflowFields           []WorkflowField            `json:"workflowFields"`
+	RunningHubUseWallet      bool                       `json:"runningHubUseWallet"`
+	RunningHubWalletKey      string                     `json:"runningHubWalletApiKey"`
+	RunningHubUploadKey      string                     `json:"runningHubUploadApiKey"`
 }
 
 type Media struct {

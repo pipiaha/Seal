@@ -33,9 +33,11 @@ type ChannelPreset struct {
 var builtins = mustLoadCatalog()
 
 func BuiltinChannels() []ChannelPreset {
-	result := make([]ChannelPreset, len(builtins))
+	result := make([]ChannelPreset, 0, len(builtins))
 	for index := range builtins {
-		result[index] = builtins[index].Clone()
+		if builtins[index].ID != "beefapi" {
+			result = append(result, builtins[index].Clone())
+		}
 	}
 	return result
 }

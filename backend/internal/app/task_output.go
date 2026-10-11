@@ -256,6 +256,22 @@ func publicTaskInputJSON(raw string) string {
 		return ""
 	}
 	public := map[string]any{}
+	if config, ok := input["config"].(map[string]any); ok {
+		source := map[string]any{}
+		for _, key := range []string{"sourceChannelName", "interfaceType"} {
+			if value, ok := config[key].(string); ok {
+				source[key] = value
+			}
+		}
+		if base, ok := config["baseUrl"].(string); ok {
+			if u, err := url.Parse(base); err == nil {
+				source["host"] = u.Host
+			}
+		}
+		if len(source) > 0 {
+			public["providerSource"] = source
+		}
+	}
 	// Only expose the parameters needed for result comparison and paid retry
 	// confirmation. Never expose credentials, headers, media URLs or bytes.
 	if input["mode"] == "video" {

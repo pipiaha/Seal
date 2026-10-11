@@ -269,7 +269,7 @@ func TaskInputUsesCustomChannel(input map[string]any) bool {
 	if strings.TrimSpace(channelID) != "" || SystemChannelIDFromBaseURL(baseURL) != "" {
 		return false
 	}
-	return strings.TrimSpace(baseURL) != "" && strings.TrimSpace(apiKey) != ""
+	return strings.TrimSpace(baseURL) != "" && (strings.TrimSpace(apiKey) != "" || configuredAnonymousProvider(config))
 }
 
 func TaskInputUsesSystemChannel(input map[string]any) bool {
@@ -318,7 +318,18 @@ func HasExecutableVideoConfig(input map[string]any) bool {
 	if admissionString(config["model"]) == "" {
 		return false
 	}
-	return admissionString(config["channelId"]) != "" || (admissionString(config["baseUrl"]) != "" && admissionString(config["apiKey"]) != "")
+	return admissionString(config["channelId"]) != "" || (admissionString(config["baseUrl"]) != "" && (admissionString(config["apiKey"]) != "" || configuredAnonymousProvider(config)))
+}
+
+func configuredAnonymousProvider(config map[string]any) bool {
+	if admissionString(config["authType"]) != "none" {
+		return false
+	}
+	switch admissionString(config["interfaceType"]) {
+	case "comfyui-image", "comfyui-video", "custom-image", "custom-video":
+		return true
+	}
+	return false
 }
 
 // ChannelAPIFormatForProtocol chooses auth/envelope format from the model

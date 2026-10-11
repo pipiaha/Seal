@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/assistant"
-	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/protocol"
 )
 
@@ -24,8 +23,6 @@ var assistantProtocols = map[string]string{
 	"responses":       "responses",
 	"openai-response": "responses",
 }
-
-var managedAssistantModels = []string{beefapi.DefaultManagedAssistantModel, "claude-opus-5-5", "deepseek-v4.1-flash", "glm-5.3"}
 
 type AssistantModelProfile struct {
 	Model            string `json:"model"`
@@ -65,14 +62,15 @@ type AssistantChannel struct {
 }
 
 type AssistantConfigSnapshot struct {
-	Revision       int64              `json:"-"`
-	AssistantModel string             `json:"assistantModel"`
-	TextModel      string             `json:"textModel"`
-	ImageModel     string             `json:"imageModel"`
-	VideoModel     string             `json:"videoModel"`
-	AudioModel     string             `json:"audioModel"`
-	BaseURL        string             `json:"baseUrl"`
-	Channels       []AssistantChannel `json:"channels"`
+	ModelSelectionRequired []string           `json:"modelSelectionRequired"`
+	Revision               int64              `json:"-"`
+	AssistantModel         string             `json:"assistantModel"`
+	TextModel              string             `json:"textModel"`
+	ImageModel             string             `json:"imageModel"`
+	VideoModel             string             `json:"videoModel"`
+	AudioModel             string             `json:"audioModel"`
+	BaseURL                string             `json:"baseUrl"`
+	Channels               []AssistantChannel `json:"channels"`
 }
 
 // ManagedCredentialLookup fills hosted-channel secrets that are not stored in
@@ -109,6 +107,11 @@ func AssistantUnavailable(reason, message string) error {
 // Credential lookup for hosted channels is injected; secrets never appear in
 // error messages.
 func ResolveAssistantProvider(snapshot AssistantConfigSnapshot, lookup ManagedCredentialLookup) (assistant.Provider, error) {
+	for _, field := range snapshot.ModelSelectionRequired {
+		if field == "assistantModel" && strings.TrimSpace(snapshot.AssistantModel) == "" {
+			return assistant.Provider{}, AssistantUnavailable(AssistantReasonModelNotConfigured, "原内置渠道已移除，请重新选择助手模型")
+		}
+	}
 	selection := strings.TrimSpace(snapshot.AssistantModel)
 	if selection == "" {
 		selection = strings.TrimSpace(snapshot.TextModel)
@@ -136,17 +139,8 @@ func ResolveAssistantChannelModel(snapshot AssistantConfigSnapshot, modelKey str
 	if !assistantChannelHasModel(channel, modelID) {
 		return assistant.Provider{}, AssistantReasonModelNotConfigured
 	}
-	if channel.ID == "beefapi" && (channel.Pinned || channel.CredentialRef == "beefapi-enterprise") {
-		allowed := false
-		for _, candidate := range managedAssistantModels {
-			if assistantModelAlias(channel, candidate) == modelID {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return assistant.Provider{}, AssistantReasonModelNotConfigured
-		}
+	if channel.ID == "beefapi" || channel.CredentialRef == "beefapi-enterprise" {
+		return assistant.Provider{}, AssistantReasonModelNotConfigured
 	}
 	protocol, protocolOK := ChannelModelProtocol(channel, modelID)
 	if !protocolOK {

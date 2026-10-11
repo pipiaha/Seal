@@ -3,6 +3,7 @@ const workspaceRouteLoaders = {
     home: () => import("@/pages/home"),
     assets: () => import("@/pages/assets"),
     skills: () => import("@/pages/skills"),
+    'call-logs': () => import("@/pages/call-logs"),
     canvas: () => import("@/pages/canvas"),
     create: () => import("@/pages/create"),
     projects: () => import("@/pages/projects"),

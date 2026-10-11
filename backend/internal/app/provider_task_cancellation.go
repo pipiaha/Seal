@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/generation"
+	"infinite-canvas/backend/internal/protocol"
 	"net/http"
 	"net/url"
 	"strings"
@@ -78,7 +80,7 @@ func (s *Service) requestProviderCancellation(ctx context.Context, task *model.T
 	if err != nil {
 		return s.markProviderCancellationUncertain(task, providerCancellationUncertainMessage("读取上游取消配置失败")+"："+err.Error())
 	}
-	if !supportsProviderCancellation(input.Config.InterfaceType) {
+	if !supportsProviderCancellation(input.Config.InterfaceType) && !(input.Config.CustomProvider != nil && input.Config.CustomProvider.Cancel != nil && strings.HasPrefix(input.Config.InterfaceType, "custom-")) {
 		return s.markProviderCancellationUncertain(task, providerCancellationUncertainMessage("当前上游协议不支持取消"))
 	}
 
@@ -89,6 +91,10 @@ func (s *Service) requestProviderCancellation(ctx context.Context, task *model.T
 	requestCtx = withProviderRequestKind(withProviderAnalytics(requestCtx, s, requestTask), "cancel")
 	if err := cancelProviderTask(requestCtx, input.Config, task.ProviderRequestID); err != nil {
 		return s.markProviderCancellationUncertain(task, providerCancellationUncertainMessage("上游取消请求结果不明确")+"："+safeProviderLogError(err))
+	}
+	if strings.HasPrefix(input.Config.InterfaceType, "comfyui-") {
+		now := time.Now()
+		return s.repo.UpdateTaskProviderCancellation(task.ID, model.ProviderCancelStatusRequested, model.ProviderCancelStatusConfirmed, "", nil, &now)
 	}
 	_ = s.log(task.UserID, task.ID, "info", "已请求上游取消，等待供应商确认", task.ProviderRequestID)
 	return nil
@@ -176,11 +182,24 @@ func (s *Service) providerCancellationInput(task *model.Task) (canvasGenerationI
 }
 
 func supportsProviderCancellation(interfaceType string) bool {
-	return interfaceType == string(model.ChannelInterfaceGeminiVeo) || model.IsVolcengineArkVideoProtocol(model.ChannelInterfaceType(interfaceType))
+	return strings.HasPrefix(interfaceType, "comfyui-") || interfaceType == string(model.ChannelInterfaceGeminiVeo) || model.IsVolcengineArkVideoProtocol(model.ChannelInterfaceType(interfaceType))
 }
 
 func cancelProviderTask(ctx context.Context, config providerConfig, providerRequestID string) error {
 	switch {
+	case config.CustomProvider != nil && strings.HasPrefix(config.InterfaceType, "custom-"):
+		adapter, err := protocol.ConfiguredProvider(*config.CustomProvider, protocol.Capability(strings.TrimPrefix(config.InterfaceType, "custom-")))
+		if err != nil {
+			return err
+		}
+		request, err := adapter.BuildCancel(ctx, protocol.PollContext{BaseURL: config.BaseURL, Model: config.Model, TaskID: providerRequestID})
+		if err != nil {
+			return err
+		}
+		_, err = generation.ExecuteProtocolRequest(ctx, config, request)
+		return err
+	case strings.HasPrefix(config.InterfaceType, "comfyui-"):
+		return generation.CancelComfyUITask(ctx, config, providerRequestID)
 	case config.InterfaceType == string(model.ChannelInterfaceGeminiVeo):
 		path := "/" + strings.TrimLeft(providerRequestID, "/") + ":cancel"
 		return postGeminiJSON(ctx, config, path, map[string]any{}, &map[string]any{})
@@ -211,6 +230,43 @@ func deleteProviderTask(ctx context.Context, config providerConfig, path string)
 
 func queryProviderCancellation(ctx context.Context, config providerConfig, providerRequestID string) (providerCancellationOutcome, string, error) {
 	switch {
+	case config.CustomProvider != nil && strings.HasPrefix(config.InterfaceType, "custom-"):
+		adapter, err := protocol.ConfiguredProvider(*config.CustomProvider, protocol.Capability(strings.TrimPrefix(config.InterfaceType, "custom-")))
+		if err != nil {
+			return "", "", err
+		}
+		poll := protocol.PollContext{BaseURL: config.BaseURL, Model: config.Model, TaskID: providerRequestID}
+		spec, err := adapter.BuildPoll(ctx, poll)
+		if err != nil {
+			return "", "", err
+		}
+		data, err := generation.ExecuteProtocolRequest(ctx, config, spec)
+		if err != nil {
+			return "", "", err
+		}
+		state, err := adapter.ParsePoll(ctx, poll, data)
+		if err != nil {
+			return "", "", err
+		}
+		switch state.Status {
+		case protocol.StatusCancelled:
+			return providerCancellationConfirmed, string(state.Status), nil
+		case protocol.StatusSucceeded:
+			return providerCancellationSucceeded, string(state.Status), nil
+		case protocol.StatusFailed:
+			return providerCancellationFailed, string(state.Status), nil
+		default:
+			return providerCancellationPending, string(state.Status), nil
+		}
+	case strings.HasPrefix(config.InterfaceType, "comfyui-"):
+		_, status, err := generation.QueryComfyUITask(ctx, canvasGenerationInput{Mode: "video", Config: config}, providerRequestID)
+		if err != nil {
+			return "", "", err
+		}
+		if status == "succeeded" {
+			return providerCancellationSucceeded, status, nil
+		}
+		return providerCancellationPending, status, nil
 	case config.InterfaceType == string(model.ChannelInterfaceGeminiVeo):
 		// Gemini 用 operation.error 表示取消终态，此处必须保留该字段再判断，
 		// 不能让通用 JSON 解包提前把它转换成请求失败。

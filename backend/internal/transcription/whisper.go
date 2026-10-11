@@ -32,6 +32,7 @@ type Client struct {
 	APIKey   string
 	Model    string
 	Endpoint string
+	Observe  func(*http.Request, time.Time, int, []byte, error)
 }
 
 func NewClient(baseURL string) *Client {
@@ -92,24 +93,38 @@ func (c *Client) Transcribe(ctx context.Context, wavPath string, language string
 	if c.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
+	startedAt := time.Now()
+	statusCode := 0
+	var payload []byte
+	var requestErr error
+	defer func() {
+		if c.Observe != nil {
+			c.Observe(req, startedAt, statusCode, payload, requestErr)
+		}
+	}()
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		requestErr = err
 		return nil, "", fmt.Errorf("无法连接转写服务，请检查地址与网络")
 	}
 	defer resp.Body.Close()
+	statusCode = resp.StatusCode
+	payload, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		requestErr = err
+		return nil, "", fmt.Errorf("读取转写结果失败: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("转写服务返回 %d，请检查密钥、模型及服务配额", resp.StatusCode)
 	}
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, "", fmt.Errorf("读取转写结果失败: %w", err)
-	}
 	segments, languageOut, err := DecodeVerboseJSON(payload)
 	if err != nil {
+		requestErr = err
 		return nil, "", err
 	}
 	if len(segments) == 0 {
-		return nil, "", fmt.Errorf("本地转写服务未识别出语音内容")
+		requestErr = fmt.Errorf("转写服务未识别出语音内容")
+		return nil, "", requestErr
 	}
 	return segments, languageOut, nil
 }

@@ -9,6 +9,12 @@ description: Seal后端核心持久化表与状态边界
 
 ## 结构迁移与版本
 
+### 媒体调用日志
+
+沿用 `api_call_logs` 表，不新增迁移。图片、视频、在线 ASR 与语音的每次创建、状态查询、上传和下载分别保存；不再用查询结果覆盖首次提交报文。页面按当前用户及 `task_id` 归组，单次正文按需读取，不会全量载入。
+
+`upstream_url` 保留完整路径与查询参数，URL 中的凭证和签名脱敏；`request_body`、`response_body` 保存有限长度的脱敏报文，内嵌媒体只记类型和大小。本地 ASR 不产生渠道日志。旧版被合并的历史查询无法恢复成逐次请求。
+
 ### 本地模型配置加密
 
 文字模型的 `modelProfiles[].capabilityConfig.text` 保存助手执行参数：`maxOutputTokens`（默认49152）、可选 `outputTokenLimit`、`contextWindow`（默认200000）、`reasoningFormat`（默认auto）、`reasoningEffort` 与 `reasoningLevels`。输出上限与预算取较小值；实际请求还受剩余上下文约束。参数参与助手供应商指纹，空闲时更新宿主；当前轮次固定启动时参数。它们保存在原加密配置中，不新增数据库表。思考格式自动识别失败时不发送控制参数，界面允许明确配置格式和真实支持的档位。

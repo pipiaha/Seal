@@ -18,14 +18,14 @@ func TestVideoPollLogSchedulesNextCheckThirtySecondsLater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Task{}, &model.ApiCallLog{}); err != nil {
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.Asset{}, &model.CanvasProject{}, &model.Task{}, &model.TaskLog{}, &model.Result{}, &model.ApiCallLog{}, &model.TaskTextDelta{}); err != nil {
 		t.Fatal(err)
 	}
 	task := model.Task{ID: "task-1", UserID: "user-1", Type: "canvas_video", Status: model.TaskStatusRunning}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}
-	root := model.ApiCallLog{ID: "api-log-1", UserID: task.UserID, TaskID: task.ID, Capability: "video", RequestKind: "create", ProviderRequestID: "provider-task-1", CreatedAt: time.Now()}
+	root := model.ApiCallLog{ID: "api-log-1", UserID: task.UserID, TaskID: task.ID, Capability: "video", RequestKind: "create", ProviderRequestID: "provider-task-1", ResponseBody: `{"task_id":"provider-task-1"}`, CreatedAt: time.Now()}
 	if err := db.Create(&root).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,13 @@ func TestVideoPollLogSchedulesNextCheckThirtySecondsLater(t *testing.T) {
 	delay := stored.NextPollAt.Sub(startedAt)
 	if delay < 30*time.Second || delay > 31*time.Second {
 		t.Fatalf("next poll delay = %s, want approximately 30s", delay)
+	}
+	var requests []model.ApiCallLog
+	if err := db.Where("task_id = ?", task.ID).Order("created_at").Find(&requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0].ResponseBody != root.ResponseBody || requests[1].RequestKind != "poll" {
+		t.Fatalf("create response was overwritten by polling: %+v", requests)
 	}
 }
 

@@ -13,7 +13,7 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 - 写入接口限制 body 大小并校验资源归属；不信任前端提供的文件路径、模型能力或 provider 状态。
 - 外部模型密钥由本地 provider config 管理，不在 API 日志或任务列表中返回。
 
-自定义模型服务的配置仍由受保护的工作区配置接口提供给当前界面；运行时内存和生成请求可能包含凭据。浏览器持久配置缓存不保存 API Key、Secret Key 或自定义 Header，启动后从后端加载。内置 BeefAPI 继续使用后端凭据引用。配置导出会遮盖密钥和 Header 值；回填脱敏标记时必须匹配原渠道与 Header 名称，不能借用其他渠道的密钥。
+自定义模型服务的配置仍由受保护的工作区配置接口提供给当前界面；运行时内存和生成请求可能包含凭据。浏览器持久配置缓存不保存 API Key、Secret Key 或自定义 Header，启动后从后端加载。旧内置 BeefAPI 连接已移除，配置读取和保存时清理旧渠道及其默认模型；原默认模型需要重新选择。配置导出会遮盖密钥和 Header 值；回填脱敏标记时必须匹配原渠道与 Header 名称，不能借用其他渠道的密钥。
 
 模型目录通过本地后端读取。模型测试使用正常任务入口，等待最终文本或媒体结果才显示通过；测试会产生供应商费用，须先确认。测试结果不证明画布回填、媒体解码或最终账务结算。
 
@@ -32,7 +32,10 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 | 路由组 | 用途 |
 | --- | --- |
 | `/workspace/*` | 本地工作区启动和模型配置 |
-| `/beefapi/connection*` | 内置 BeefAPI 企业连接：开始、状态、取消、断开；页面只收到账号和状态，收不到密钥 |
+| `/workspace/providers/comfyui/inspect` | 只读检查用户配置的本地 ComfyUI 服务与节点，不提交生成 |
+| `/call-logs` | 当前工作区的媒体调用列表，按任务归组；支持类型、渠道、状态、任务和关键词筛选 |
+| `/call-logs/:id` | 任务请求过程，每页 30 条；不含正文 |
+| `/call-logs/:id/requests/:requestId` | 同一任务的一次请求，含脱敏的完整 URL、参数、响应、HTTP 状态和耗时 |
 | `/canvas-projects/*`, `/projects/*` | 画布、项目、章节、分镜与快照 |
 | `/resources/*` | 本地素材、分片上传和媒体读取 |
 | `/timeline/render-plan` | 只读编译时间线语义渲染计划：不排队、不落盘、不计费 |
@@ -48,6 +51,8 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 | `/health/*`, `/system/version` | 启动、就绪与版本诊断 |
 
 `POST /timeline/render-plan` 接收时间线快照、不透明源标识和输出选项，返回版本化语义计划。源标识是 nodeId 或 resource id，不是本地路径。请求不得携带 ffmpeg 参数。该接口不做生成、不写资源、不创建任务。
+
+`POST /workspace/providers/comfyui/inspect` 仅限本地工作区，最多接收 64 KiB JSON：`baseUrl`、`authType`（none/bearer/header）、`apiKey`、`authHeader`、`headers`。返回信封中的 `data.stats` 与 `data.nodes`，分别来自 `/system_stats`、`/object_info`。请求允许连接配置中的回环服务，不允许跨服务重定向；不执行 `/prompt`，不安装节点。完整使用合同见[自定义图片、视频接口与本地 ComfyUI](../models/custom-media-providers)。
 
 `POST /timeline/renders` 接收同一套时间线快照和输出选项（宽高、帧率、采样率、是否烧录字幕），创建本机 ffmpeg 成片任务。选项进入任务输入并在执行时编译进语义计划。
 
@@ -337,9 +342,9 @@ NewAPI Channel 2 与 BeefAPI 视频的暂时下载断连会保留原任务 ID �
 
 旧内置 Agent 的 `/agent/*` 端点已随该功能退场，历史运行、偏好和记忆数据仍保留在本地数据库中。通用任务接口会按产品边界拒绝 `cloud_agent`、`cloud_agent_step` 和 `agent_memory_compact`，不会把它们当作普通生成任务执行。
 
-内置 BeefAPI 连接成功后，同一份企业凭证用于渠道请求和模型目录。企业连接、模型目录、Provider/Protocol 与自定义渠道不受 Agent 退场影响。
+模型渠道由用户自行配置，旧内置 BeefAPI 授权、目录拉取与钱包入口不再注册。已有参考素材上传与 Provider/Protocol 适配仍按所选渠道执行；失败时不会自动重提生成。
 
-内置 BeefAPI 的 Seedance 视频任务由本机后端上传参考素材后再向上游提交链接；浏览器不直接访问该上传接口，也不把整份参考文件放进本地 `/tasks` 请求。本机已保存的参考文件即使工作区已有公开访问地址，也仍由本机后端上传后再提交链接。失败时不会自动重提生成。
+导航中的“调用日志”只展示图片、视频、在线 ASR 和语音，不记录本地 ASR，也不展示文字调用。创建、查询、上传和下载分别保存，任务状态与单次 HTTP 结果分开显示。密钥、签名、Cookie 和内嵌媒体不会原样进入新日志；读取旧日志时再次脱敏。旧版合并过的查询日志无法还原为逐次请求。
 
 ## HyperFrames 本地创作接口
 

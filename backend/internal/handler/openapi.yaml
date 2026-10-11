@@ -23,11 +23,44 @@ tags:
   - name: tasks
   - name: assets
   - name: admin
-  - name: beefapi
+  - name: call-logs
   - name: agent-ops
   - name: assistant
   - name: creation-conversations
 paths:
+  /workspace/providers/comfyui/inspect:
+    post:
+      tags: [meta]
+      summary: 本地工作区只读检查 ComfyUI 连接和节点（不生成）
+      description: 读取配置服务的 system_stats 与 object_info。最多 64 KiB 请求体；回环连接仅用于 ComfyUI，不允许跨服务重定向。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseUrl, authType]
+              properties:
+                baseUrl: {type: string, example: "http://127.0.0.1:8188"}
+                authType: {type: string, enum: [none, bearer, header]}
+                apiKey: {type: string, writeOnly: true}
+                authHeader: {type: string}
+                headers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: {type: string}
+                      value: {type: string, writeOnly: true}
+      responses:
+        "200":
+          description: data.stats 是服务状态，data.nodes 是节点定义
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Envelope"}
+        "400": {description: 配置或请求格式错误}
+        "403": {description: 当前不是本地工作区}
+        "500": {description: ComfyUI 服务连接或响应失败}
   /assistant/web-settings:
     get:
       tags: [assistant]
@@ -204,42 +237,72 @@ paths:
       responses:
         "200":
           description: 墓碑已写入
-  /beefapi/connection:
+  /call-logs:
     get:
-      tags: [beefapi]
-      summary: 读取内置 BeefAPI 连接状态
-      description: 只返回账号和状态，不含密钥或 device_code。
+      tags: [call-logs]
+      summary: 按任务分页查看当前工作区的媒体调用
+      description: 仅图片、视频、在线 ASR 与语音；不含文字和本地 ASR。列表不返回请求与响应正文。
+      parameters:
+        - in: query
+          name: capability
+          schema: { type: string, enum: [image, video, asr, audio] }
+        - in: query
+          name: status
+          schema: { type: string, enum: [succeeded, failed, running, uncertain] }
+        - in: query
+          name: keyword
+          schema: { type: string, maxLength: 256 }
+        - in: query
+          name: channelId
+          schema: { type: string }
+        - in: query
+          name: taskId
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
       responses:
         "200":
-          description: 信封 data 为连接摘要
-  /beefapi/connection/start:
-    post:
-      tags: [beefapi]
-      summary: 开始企业授权并打开系统浏览器确认页
+          description: 信封 data 为 items、total、page、pageSize；items 包含任务状态 outcome 和 requestCount
+  /call-logs/{id}:
+    get:
+      tags: [call-logs]
+      summary: 读取当前用户的任务请求过程
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
       responses:
         "200":
-          description: 进入 pending 或返回已连接状态
-  /beefapi/connection/cancel:
-    post:
-      tags: [beefapi]
-      summary: 取消尚未完成的授权
+          description: 信封 data 为 entry、requests、total、page、pageSize；请求过程每页 30 条，正文按需读取
+        "404":
+          description: 记录不存在或不属于当前用户
+  /call-logs/{id}/requests/{requestId}:
+    get:
+      tags: [call-logs]
+      summary: 读取一次实际请求的地址、参数与响应
+      description: 必须属于指定任务及当前用户。URL 保留路径和查询参数，密钥、签名、Cookie 隐藏；内嵌媒体省略，报文有大小限制。无 HTTP 响应时 statusCode 为 0。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: requestId
+          required: true
+          schema: { type: string }
       responses:
         "200":
-          description: 当前连接摘要
-  /beefapi/connection/disconnect:
-    post:
-      tags: [beefapi]
-      summary: 断开当前连接并吊销本机这把密钥
-      responses:
-        "200":
-          description: 当前连接摘要
-  /beefapi/connection/open-wallet:
-    post:
-      tags: [beefapi]
-      summary: 在系统浏览器打开企业充值页 /console/topup
-      responses:
-        "200":
-          description: 已打开
+          description: 信封 data 为单次 ApiCallLog，包含 upstreamUrl、requestBody、responseBody、statusCode、durationMs、error
+        "404":
+          description: 记录不存在或不属于指定任务和当前用户
   /canvas-folders:
     get:
       tags: [canvas]

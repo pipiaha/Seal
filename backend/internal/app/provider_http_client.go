@@ -16,6 +16,7 @@ import (
 
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/platform"
 )
 
 func withHTTPRequestRuntime(req *http.Request) *http.Request {
@@ -215,7 +216,7 @@ func recordProviderRequest(service *Service, req *http.Request, startedAt time.T
 		RequestKind: requestKind,
 		APIFormat:   apiFormat, Method: req.Method, Path: req.URL.Path, Model: call.Model,
 		Status: status, StatusCode: statusCode, DurationMs: time.Since(startedAt).Milliseconds(),
-		ErrorCode: errorCode, Error: errorText, ConcurrencyLimit: call.ConcurrencyLimit, UpstreamURL: req.URL.Scheme + "://" + req.URL.Host + req.URL.Path,
+		ErrorCode: errorCode, Error: errorText, ConcurrencyLimit: call.ConcurrencyLimit, UpstreamURL: platform.SanitizeAPICallURL(req.URL.String()),
 		ProviderRequestID: call.ProviderRequestID, RequestContentType: req.Header.Get("Content-Type"), RequestBody: requestPayloadForLog(req), ResponseBody: SanitizeAPICallPayload(responseBody, ""),
 	}
 	if code, message := ChannelSlotFailureDetails(requestErr); code != "" {

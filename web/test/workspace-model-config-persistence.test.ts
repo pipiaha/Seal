@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as workspaceBootstrap from "../src/components/workspace/workspace-bootstrap-hydrator";
 import { localWorkspaceConfig } from "../src/lib/user-session";
-import { mergeManagedBeefAPICatalog } from "../src/pages/settings/channel-settings-pane";
-import { createModelChannel, defaultConfig, type AiConfig } from "../src/stores/use-config-store";
+import { createModelChannel, defaultConfig, normalizeConfigSnapshot, type AiConfig } from "../src/stores/use-config-store";
 import { createModelConfigRepository } from "../src/services/model-config-repository";
 
 test("local-mode startup restores the local model config after the session", async () => {
@@ -193,7 +192,7 @@ test("catalog refresh keeps pending manual provider edits across delayed read an
     const first = repository.commit(current);
     const catalogRefresh = (async () => {
         await catalogRead;
-        return mergeManagedBeefAPICatalog(current, serverCatalog);
+        return normalizeConfigSnapshot({ config: current }).config;
     })();
     current = {
         ...current,
@@ -210,11 +209,11 @@ test("catalog refresh keeps pending manual provider edits across delayed read an
 
     expect(merged.channels.find((channel) => channel.id === "manual")?.name).toBe("连接过程中的改名");
     expect(merged.channels.find((channel) => channel.id === "manual")?.models).toEqual(["draft-image", "extra-image"]);
-    expect(merged.channels.find((channel) => channel.id === "beefapi")?.models).toEqual(["enterprise-image"]);
+    expect(merged.channels.find((channel) => channel.id === "beefapi")).toBeUndefined();
     const lastWrite = writes[writes.length - 1];
     expect(lastWrite?.channels.find((channel) => channel.id === "manual")?.name).toBe("连接过程中的改名");
     expect(lastWrite?.channels.find((channel) => channel.id === "manual")?.models).toEqual(["draft-image", "extra-image"]);
-    expect(lastWrite?.channels.find((channel) => channel.id === "beefapi")?.models).toEqual(["enterprise-image"]);
+    expect(lastWrite?.channels.find((channel) => channel.id === "beefapi")).toBeUndefined();
     expect(writes.some((config) => config.channels.find((channel) => channel.id === "manual")?.name === "第一次改名")).toBe(true);
     expect(repository.getState()).toMatchObject({ dirty: false });
 });

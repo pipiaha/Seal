@@ -1,4 +1,4 @@
-import { ChevronRight, Clapperboard, Home, PanelLeftClose, PanelLeftOpen, Plug, Plus, Puzzle, Settings2, Sun, Moon } from "lucide-react";
+import { ChevronRight, Clapperboard, Home, PanelLeftClose, PanelLeftOpen, Plug, Plus, Puzzle, Settings2, Sun, Moon, ListChecks } from "lucide-react";
 import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
@@ -52,6 +52,7 @@ function buildNav(features: FeatureAvailability): { groups: WorkspaceNavGroup[];
                 { id: "skills", title: "Skill Hub", icon: Puzzle, to: "/skills" },
                 { ...toolItem("assets", "/assets"), title: "资产" },
                 { id: "settings:channels", title: "模型配置", icon: Settings2, to: "/settings?section=channels" },
+                { id: "call-logs", title: "调用日志", icon: ListChecks, to: "/call-logs" },
                 { id: "agents", title: "外部 Agent", icon: Plug, to: "/agents" },
             ],
         },

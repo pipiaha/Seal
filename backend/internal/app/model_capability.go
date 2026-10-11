@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"infinite-canvas/backend/internal/generation"
 
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
@@ -18,6 +19,9 @@ func (s *Service) ValidateTaskCapability(input map[string]any) error {
 	}
 	if taskInput.Mode != "image" && taskInput.Mode != "video" && taskInput.Mode != "audio" {
 		return nil
+	}
+	if generation.IsConfiguredInterface(taskInput.Config.InterfaceType) {
+		return generation.ValidateConfiguredProvider(taskInput.Mode, taskInput.Config)
 	}
 	if isWorkflowProviderInterface(taskInput.Config.InterfaceType) {
 		if err := validateWorkflowProviderPromptLength(taskInput); err != nil {

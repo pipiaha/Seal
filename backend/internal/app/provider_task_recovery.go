@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/generation"
+	"infinite-canvas/backend/internal/protocol"
 	"strings"
 	"time"
 
@@ -92,8 +94,16 @@ func (s *Service) queryFailedVideoTask(ctx context.Context, task *model.Task, cl
 	}
 	ctx = ensureOfficialProtocolAdapter(ctx, config.InterfaceType)
 	adapter, declarative := declarativeProtocolAdapterForContext(ctx, config.InterfaceType)
+	if config.InterfaceType == "custom-video" && config.CustomProvider != nil {
+		adapter, err = protocol.ConfiguredProvider(*config.CustomProvider, protocol.CapabilityVideo)
+		if err != nil {
+			return nil, err
+		}
+		declarative = true
+	}
+	comfy := config.InterfaceType == "comfyui-video"
 	beefVideo := isBeefAPIVideoConfig(ctx, config) && isSeedanceVideoConfig(config)
-	if !declarative && !beefVideo {
+	if !declarative && !beefVideo && !comfy {
 		return nil, BadAuthRequest("该任务的请求协议不支持安全查询上游状态")
 	}
 	input.Config = config
@@ -125,7 +135,9 @@ func (s *Service) queryFailedVideoTask(ctx context.Context, task *model.Task, cl
 	queryCtx := withProviderAnalytics(recoveryCtx, s, *task)
 	var result map[string]interface{}
 	var providerStatus string
-	if beefVideo {
+	if comfy {
+		result, providerStatus, err = generation.QueryComfyUITask(queryCtx, input, providerRequestID)
+	} else if beefVideo {
 		result, providerStatus, err = queryBeefAPIVideoResult(queryCtx, input, providerRequestID)
 	} else {
 		result, providerStatus, err = queryProtocolAdapterVideoTask(queryCtx, input, adapter, providerRequestID)

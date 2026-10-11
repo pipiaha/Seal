@@ -66,6 +66,15 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 	taskID := ResumedProviderRequestID(ctx)
 	var created protocol.CreateResult
 	if taskID == "" {
+		if input.Config.CustomProvider != nil {
+			runtime, ok := RuntimeFromContext(ctx)
+			if !ok || runtime.Submission == nil {
+				return nil, errors.New("自定义接口缺少持久任务回执")
+			}
+			if err := runtime.Submission.Ready(ctx); err != nil {
+				return nil, err
+			}
+		}
 		// 幂等键只存在于宿主请求元数据中，声明式插件可以把它映射到 Header，
 		// 但不能把宿主控制字段泄漏到供应商 JSON body。恢复已有 taskID 时不会进入 create 分支。
 		key := SubmissionKeyFromContext(ctx)
@@ -82,14 +91,14 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 		}
 		body, err := ExecuteProtocolRequest(WithRequestKind(ctx, "create"), input.Config, spec)
 		if err != nil {
-			if input.Mode == "video" {
+			if input.Mode == "video" || input.Config.CustomProvider != nil {
 				return nil, UncertainVideoSubmission(ctx, err)
 			}
 			return nil, err
 		}
 		created, err = adapter.ParseCreate(ctx, body)
 		if err != nil {
-			if input.Mode == "video" {
+			if input.Mode == "video" || input.Config.CustomProvider != nil {
 				return nil, SubmissionUnknownError{Cause: err}
 			}
 			return nil, err
@@ -104,6 +113,15 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 		}
 		if created.Status == protocol.StatusFailed || created.Status == protocol.StatusCancelled {
 			return nil, ProtocolResultError(created.Message, taskID, body)
+		}
+		if input.Config.CustomProvider != nil && taskID != "" {
+			runtime, ok := RuntimeFromContext(ctx)
+			if !ok || runtime.Submission == nil {
+				return nil, SubmissionUnknownError{Cause: errors.New("自定义接口缺少任务回执")}
+			}
+			if err := runtime.Submission.RecordAccepted(ctx, taskID, "submitted", nil); err != nil {
+				return nil, SubmissionUnknownError{Cause: err}
+			}
 		}
 		if created.Status == protocol.StatusSucceeded {
 			return FinishProtocolAdapterResult(ctx, input, adapter, request, taskID, created.Result, policy)
@@ -293,6 +311,7 @@ func ProtocolRequestFromInput(input Input) protocol.GenerationRequest {
 		Watermark:     ParseBool(input.Config.VideoWatermark, false),
 		Operation:     firstNonEmpty(metadataString(input.Metadata, "videoEditOperation"), metadataString(input.Metadata, "videoOperation")),
 		Extra: map[string]any{
+			"size":         input.Config.Size,
 			"videoSeconds": input.Config.VideoSeconds,
 			"audioVoice":   ResolvedAudioSpeechVoice(input.Config.Model, input.Config.AudioVoice),
 			"audioFormat":  defaultString(input.Config.AudioFormat, "mp3"),
@@ -449,6 +468,10 @@ func ExecuteProtocolBinaryRequestWithConsumer(ctx context.Context, config Config
 		return nil, "", err
 	}
 	requestURL, err := ProtocolRequestURL(config.BaseURL, spec)
+	if strings.HasPrefix(config.InterfaceType, "custom-") && !spec.OriginPath {
+		// User-defined endpoints use their exact base path; do not assume an OpenAI /v1 prefix.
+		requestURL, err = AppendProtocolQuery(strings.TrimRight(config.BaseURL, "/")+spec.Path, spec.Query)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -1117,6 +1140,12 @@ func ValidateGenerationInterface(mode string, interfaceType string) error {
 
 func ValidateGenerationInterfaceWithRegistry(registry *protocol.Registry, mode string, interfaceType string) error {
 	interfaceType = strings.TrimSpace(interfaceType)
+	if interfaceType == "custom-image" || interfaceType == "custom-video" || interfaceType == "comfyui-image" || interfaceType == "comfyui-video" {
+		if mode != "" && !strings.HasSuffix(interfaceType, "-"+mode) {
+			return fmt.Errorf("接口类型 %s 不支持%s生成", interfaceType, mode)
+		}
+		return nil
+	}
 	if interfaceType == "" {
 		return nil
 	}

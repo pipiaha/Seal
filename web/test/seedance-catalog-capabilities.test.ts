@@ -3,7 +3,6 @@ import axios from "axios";
 
 import { mergeFetchedChannelModelProfiles, sanitizeChannelModelCatalogItem } from "../src/lib/channel-model-catalog";
 import { modelCapabilityConfigFor, sanitizeServerVideoCapability, type VideoCapabilityConfig } from "../src/lib/model-capabilities";
-import { mergeManagedBeefAPICatalog } from "../src/pages/settings/channel-settings-pane";
 import { fetchChannelModels } from "../src/services/api/image-models";
 import { assertVideoCapability } from "../src/services/api/video-validation";
 import { createModelChannel, defaultConfig, normalizeConfigSnapshot } from "../src/stores/use-config-store";
@@ -83,7 +82,7 @@ test("refresh replaces managed capabilities and keeps the new version", () => {
     expect(profiles[0]?.capabilityConfig?.video?.references.maxAudios).toBe(1);
 });
 
-test("explicit zero limits stay zero for a server-sourced BeefAPI capability", () => {
+test("explicit zero limits stay zero for a saved custom channel capability", () => {
     const model = "seedance-2.0";
     const capabilityConfig = {
         version: 1,
@@ -101,24 +100,22 @@ test("explicit zero limits stay zero for a server-sourced BeefAPI capability", (
         },
     };
     const channel = createModelChannel({
-        id: "beefapi",
-        baseUrl: "https://enterprise.beefapi.com",
+        id: "manual-video",
+        baseUrl: "https://example.com",
         models: [model],
         modelProfiles: [{ model, capability: "video", protocol: "newapi", capabilityConfig, videoCapabilitiesVersion: "cap-v1" }],
     });
     const config = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [channel] } }).config;
     const profile = config.channels[0]?.modelProfiles?.find((item) => item.model === model);
     expect(profile?.videoCapabilitiesVersion).toBe("cap-v1");
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxVideos).toBe(0);
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxAudios).toBe(0);
+    expect(modelCapabilityConfigFor(config, `manual-video::${model}`).video!.references.maxVideos).toBe(0);
+    expect(modelCapabilityConfigFor(config, `manual-video::${model}`).video!.references.maxAudios).toBe(0);
 });
 
-test("legacy BeefAPI Seedance still repairs unsigned zero catalogs", () => {
+test("legacy BeefAPI catalogs are removed without reintroducing their profiles", () => {
     const model = "seedance-2.0";
     const config = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [legacyZeroVideo(model)] } }).config;
-    expect(config.channels[0]?.modelProfiles?.[0]?.videoCapabilitiesVersion).toBeUndefined();
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxVideos).toBe(3);
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxAudios).toBe(3);
+    expect(config.channels).toEqual([]);
 });
 
 test("invalid or missing catalog video does not clear a good sourced profile", () => {
@@ -151,25 +148,6 @@ test("custom channels ignore catalog video capabilities", () => {
     expect(profiles[0]?.videoCapabilitiesVersion).toBeUndefined();
     expect(profiles[0]?.capabilityConfig?.video?.references.maxVideos).toBe(1);
     expect(profiles[0]?.capabilityConfig?.video?.references.maxAudios).toBe(0);
-});
-
-test("mergeManagedBeefAPICatalog copies sourced capabilities from the backend snapshot", () => {
-    const current = { ...defaultConfig, channels: [createModelChannel({ id: "beefapi", pinned: true, models: ["stale"] })] };
-    const server = {
-        ...defaultConfig,
-        channels: [
-            createModelChannel({
-                id: "beefapi",
-                pinned: true,
-                models: ["seedance-2.0"],
-                modelProfiles: [{ model: "seedance-2.0", capability: "video", protocol: "newapi", capabilityConfig: { version: 1, video: sampleVideo(0, 0) }, videoCapabilitiesVersion: "from-server" }],
-            }),
-        ],
-    };
-    const merged = mergeManagedBeefAPICatalog(current, server);
-    const profile = merged.channels.find((channel) => channel.id === "beefapi")?.modelProfiles?.[0];
-    expect(profile?.videoCapabilitiesVersion).toBe("from-server");
-    expect(profile?.capabilityConfig?.video?.references.maxVideos).toBe(0);
 });
 
 test("sanitizeServerVideoCapability rejects non-finite values and keeps omitted nested limits omitted", () => {

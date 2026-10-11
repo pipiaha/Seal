@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/editing"
+	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/repository"
 	localtask "infinite-canvas/backend/internal/task"
 	"infinite-canvas/backend/internal/transcription"
+	"net/http"
 )
 
 type timelineTranscriptionInput struct {
@@ -41,6 +43,12 @@ func (w *taskWorkerCoordinator) processTimelineTranscription(task *model.Task, c
 
 	executor := s.transcriptionExecutor(task.UserID, "")
 	executor.Client = transcription.ConfiguredClient(route, settings)
+	if route == "service" {
+		ctx = s.bindGenerationRuntime(ctx, generation.CallMeta{UserID: task.UserID, TaskID: task.ID, ProjectID: task.ProjectID, TraceID: task.TraceID, RequestID: task.RequestID, ChannelID: "online-asr", Capability: "asr", Model: settings.Model, Operation: "transcribe", RequestKind: "create"})
+		executor.Client.Observe = func(req *http.Request, started time.Time, status int, body []byte, requestErr error) {
+			recordProviderRequest(s, req, started, status, body, requestErr)
+		}
+	}
 	result, err := executor.Run(ctx, input.ResourceID, input.Language, func(stage string, percent int) error {
 		return w.progress(task, stage, percent)
 	})
