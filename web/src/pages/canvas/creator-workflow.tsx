@@ -4,21 +4,27 @@ import { useQuery } from '@tanstack/react-query';
 import { captureUserScope, assertUserScope } from '@/lib/user-scope-guard';
 import { getAsrTask, getMediaProposalTask } from '@/services/api/creator';
 import { cancelGenerationTask } from '@/services/api/task-center';
+import { ChevronRight } from 'lucide-react';
 import type { AssistantWorkflow } from '@/services/api/agent-assistant';
 import type { TimelineTranscriptionResult } from '@/services/api/timeline-tasks';
 
 export function CreatorWorkflow({ workflow, projectId, disabled, onResume }: { workflow: AssistantWorkflow; projectId: string; disabled: boolean; onResume: () => void }) {
-    return <div className="canvas-assistant-card">
-        <strong>{workflow.title}</strong><p className="canvas-assistant-meta">步骤记录会随对话保存；任务状态以运行端结果为准。</p>
-        <ol className="space-y-3">
+    return <div className="canvas-assistant-workflow">
+        <details className="canvas-assistant-execution">
+        <summary><span>{workflow.title} · {workflow.steps.filter(step => step.state === 'done').length}/{workflow.steps.length} 步已记录</span><ChevronRight size={13} aria-hidden /></summary>
+        <div className="canvas-assistant-execution-body">
+        <p className="canvas-assistant-meta">任务状态以运行端结果为准。</p>
+        <ul className="space-y-3">
             {workflow.steps.map(step => <li key={step.id}>
                 <span>{step.label} · {step.state === 'done' ? '已记录完成' : step.state === 'waiting' ? '等待结果' : '待处理'}</span>
                 {step.note ? <p className="canvas-assistant-meta">{step.note}</p> : null}
-                {step.taskId && step.taskKind ? <WorkflowTaskState projectId={projectId} taskId={step.taskId} kind={step.taskKind} /> : null}
                 {step.candidateId ? <p className="canvas-assistant-meta">候选结果：{step.candidateId}</p> : null}
             </li>)}
-        </ol>
-        <Button size="small" disabled={disabled} onClick={onResume}>从现有结果继续</Button>
+        </ul>
+        </div>
+        </details>
+        {workflow.steps.filter(step => step.taskId && step.taskKind).map(step => <div key={step.id}><span className="canvas-assistant-meta">{step.label}</span><WorkflowTaskState projectId={projectId} taskId={step.taskId!} kind={step.taskKind!} /></div>)}
+        <Button type="text" size="small" disabled={disabled} onClick={onResume}>{workflow.steps.every(step => step.state === 'done') ? '继续调整' : '从现有结果继续'}</Button>
     </div>;
 }
 

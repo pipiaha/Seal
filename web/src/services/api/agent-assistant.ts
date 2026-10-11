@@ -9,11 +9,16 @@ export type AssistantUnavailableReason =
     | "model_not_configured"
     | "credential_missing"
     | "model_protocol_unsupported"
+    | "model_parameters_invalid"
     | "host_starting"
     | "host_start_failed"
     | "host_unreachable";
 
 export type AssistantModelInfo = {
+    maxOutputTokens?: number;
+    contextWindow?: number;
+    reasoningFormat?: string;
+    reasoningEffort?: string;
     maxImages?: number;
     maxImageBytes?: number;
     id: string;
@@ -38,20 +43,27 @@ export type AgentToolCall = {
     replayed?: boolean;
 };
 
+export type AssistantToolDetail = { input?: string; output?: string; truncated?: boolean };
+
 export type AgentToolEvent = {
     type: "tool";
     phase: "start" | "update" | "end";
     toolCallId: string;
     tool: string;
     isError?: boolean;
+    detail?: AssistantToolDetail;
 };
 
 export type AssistantToolActivity = {
+    detail?: AssistantToolDetail;
     updated?: boolean;
     toolCallId: string;
     tool: string;
     status: "running" | "completed" | "error" | "interrupted";
 };
+
+export type AssistantExecutionEntry = { kind: 'message'; id: string; text: string } | { kind: 'tool'; toolCallId: string };
+export type AssistantMetrics = { firstTokenMs: number | null; totalMs: number; requests?: number; toolSteps?: number };
 
 /** 一个回合真正落到画布上的改动；没写任何东西时后端给 null。 */
 export type AssistantTurnChange = {
@@ -82,6 +94,8 @@ export type AssistantMedia = { id: string; name: string; kind: 'video' | 'audio'
 export type AssistantInstruction = { instructionId: string; message: string; state: 'queued' | 'received' | 'not_processed' | 'failed'; turnId: string };
 export type AssistantWorkflow = { id: string; title: string; goal: string; revision: number; turnId: string; steps: Array<{ id: string; label: string; state: 'pending' | 'waiting' | 'done'; note?: string; taskId?: string; taskKind?: 'asr' | 'generation'; candidateId?: string; fileHash?: string; operationId?: string }> };
 export type AgentTurnEnd = {
+    execution?: AssistantExecutionEntry[];
+    finalMessageId?: string | null;
     media?: AssistantMedia[];
     images?: AssistantImageInfo[];
     instructions?: AssistantInstruction[];
@@ -99,10 +113,13 @@ export type AgentTurnEnd = {
     errorReason?: string | null;
     cancelled: boolean;
     persistence?: string;
-    metrics?: { firstTokenMs: number | null; totalMs: number };
+    metrics?: AssistantMetrics;
 };
 
 export type AssistantTurn = {
+    execution?: AssistantExecutionEntry[];
+    finalMessageId?: string | null;
+    metrics?: AssistantMetrics;
     media?: AssistantMedia[];
     images?: AssistantImageInfo[];
     instructions?: AssistantInstruction[];
@@ -137,7 +154,8 @@ export type AssistantSessionList = {
 };
 
 export type AssistantHistory = {
-    activeTurn?: { turnId: string; sessionId: string; userText: string; selectedNodeIds: string[]; instructions: AssistantInstruction[] } | null;
+    activeTurn?: { turnId: string; sessionId: string; userText: string; selectedNodeIds: string[]; instructions: AssistantInstruction[];
+        execution?: AssistantExecutionEntry[]; toolActivity?: AssistantToolActivity[]; lifecycle?: AgentLifecycleEvent | null } | null;
     sessionId: string;
     turns: (AssistantTurn & { undone?: boolean })[];
 };
@@ -309,7 +327,7 @@ export function resetAgentUiSession() {
 
 export type AgentLifecycleEvent = {
     type: "lifecycle";
-    phase: "compaction" | "compaction_end" | "retry" | "retry_end";
+    phase: "compaction" | "compaction_end" | "retry" | "retry_end" | "thinking" | "thinking_end";
     reason?: string;
     aborted?: boolean;
     willRetry?: boolean;
@@ -322,7 +340,8 @@ export type StreamHandlers = {
     onInstruction?: (instruction: AssistantInstruction) => void;
     onTurnStart?: (event: { turnId: string; sessionId: string }) => void;
     onTool?: (event: AgentToolEvent) => void;
-    onDelta?: (delta: string) => void;
+    onDelta?: (delta: string, messageId?: string) => void;
+    onMessage?: (message: { messageId: string; text: string }) => void;
     onTurnEnd?: (end: AgentTurnEnd) => void;
     onLifecycle?: (event: AgentLifecycleEvent) => void;
 };
@@ -457,7 +476,11 @@ async function readAgentTurnStream(
             return;
         }
         if (payload.type === "text_delta" && typeof payload.delta === "string") {
-            handlers.onDelta?.(payload.delta);
+            handlers.onDelta?.(payload.delta, typeof payload.messageId === 'string' ? payload.messageId : undefined);
+            return;
+        }
+        if (payload.type === 'assistant_message' && typeof payload.messageId === 'string' && typeof payload.text === 'string') {
+            handlers.onMessage?.({ messageId: payload.messageId, text: payload.text });
             return;
         }
         if (payload.type === 'turn_start' && typeof payload.turnId === 'string' && typeof payload.sessionId === 'string') {
@@ -473,6 +496,11 @@ async function readAgentTurnStream(
                 typeof payload.toolCallId === "string" && payload.toolCallId.length > 0 && payload.toolCallId.length <= 256 &&
                 typeof payload.tool === "string" && /^[\w.:-]{1,128}$/.test(payload.tool)) {
                 handlers.onTool?.({ type: "tool", phase: payload.phase, toolCallId: payload.toolCallId, tool: payload.tool,
+                    ...(payload.detail && typeof payload.detail === 'object' ? { detail: {
+                        ...(typeof (payload.detail as AssistantToolDetail).input === 'string' ? { input: (payload.detail as AssistantToolDetail).input!.slice(0, 6100) } : {}),
+                        ...(typeof (payload.detail as AssistantToolDetail).output === 'string' ? { output: (payload.detail as AssistantToolDetail).output!.slice(0, 6100) } : {}),
+                        ...((payload.detail as AssistantToolDetail).truncated === true ? { truncated: true } : {}),
+                    } } : {}),
                     ...(payload.phase === "end" ? { isError: payload.isError === true } : {}) });
             }
             return;

@@ -37,11 +37,13 @@ export function spendModelRequest(budget) {
 export function spendToolStep(budget) {
   if (!budget) return { allowed: true };
   if (budget.maxToolSteps > 0 && budget.toolSteps >= budget.maxToolSteps) {
-    return {
+    const failure = {
       allowed: false,
       reason: "turn_tool_step_budget_exhausted",
       message: `这一轮的工具步骤达到上限（${budget.maxToolSteps}），已停止继续调用；下一轮会重新计数`,
     };
+    budget.failure = failure;
+    return failure;
   }
   budget.toolSteps += 1;
   return { allowed: true };

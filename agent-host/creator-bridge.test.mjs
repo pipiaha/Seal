@@ -10,13 +10,14 @@ test('creator tools keep the current turn, immutable skill activation and truthf
     let text = ''; for await (const bytes of req) text += bytes;
     calls.push({ path: req.url, body: JSON.parse(text), headers: req.headers });
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ code: 0, data: req.url.endsWith('/propose') ? { proposalId: 'media_1', kind: 'audio', model: 'fixture', modelKey: 'fixture::fixture', prompt: 'exact text', configRevision: 1 } : req.url.endsWith('/transcribe') ? { taskId: 'asr_1', status: 'queued' } : { id: 'skill_1', formatValidated: true, behaviorVerified: false } }));
+    res.end(JSON.stringify({ code: 0, data: req.url.endsWith('/run') ? { state: 'failed', exitCode: 7, output: 'synthetic script failure' } : req.url.endsWith('/propose') ? { proposalId: 'media_1', kind: 'audio', model: 'fixture', modelKey: 'fixture::fixture', prompt: 'exact text', configRevision: 1 } : req.url.endsWith('/transcribe') ? { taskId: 'asr_1', status: 'queued' } : { id: 'skill_1', formatValidated: true, behaviorVerified: false } }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const turn = { turnId: 'turn_1', sessionId: 'session_1', proposals: [], workflowJournal: { read: () => [{ id: 'plan', steps: [{ id: 'voice' }] }] }, skillSnapshot: { skills: [{ name: 'skill-creator' }] } };
   const bridge = createCreatorBridge({ opsUrl: `http://127.0.0.1:${server.address().port}/api`, hostToken: 'host', desktopToken: 'desktop', turnBudgetContext: new AsyncLocalStorage() });
-  const tools = bridge.buildTools('cut_project', [], {}, turn, 'same_session');
+  const activity = [];
+  const tools = bridge.buildTools('cut_project', activity, {}, turn, 'same_session');
   const tool = name => tools.find(item => item.name === name);
   const saved = await tool('skill_author').execute('author_1', { files: { 'SKILL.md': 'draft' }, save: true, enabled: true });
   assert.equal(JSON.parse(saved.content[0].text).behaviorVerified, false);
@@ -37,6 +38,10 @@ test('creator tools keep the current turn, immutable skill activation and truthf
   await assert.rejects(tool('media_generation_propose').execute('unknown-step', { workflowId: 'plan', stepId: 'not-real' }), /workflow_step_not_found/);
   turn.skillSnapshot.skills = [];
   await assert.rejects(tool('skill_author').execute('disabled', {}), /skill_creator_disabled/);
+  const failed = await tool('workspace_run').execute('failed-script', { runtime: 'node', script: 'run.js' });
+  assert.equal(failed.isError, true);
+  assert.equal(JSON.parse(failed.content[0].text).exitCode, 7);
+  assert.equal(activity.at(-1).isError, true);
   const readOnly = createCreatorBridge({ readOnly: true, turnBudgetContext: new AsyncLocalStorage() }).buildTools('cut_project', [], {}, turn, 'session');
   assert.ok(!readOnly.some(item => ['skill_author', 'skill_download', 'media_transcribe'].includes(item.name)));
 });

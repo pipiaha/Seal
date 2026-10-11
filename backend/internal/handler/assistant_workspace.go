@@ -69,6 +69,34 @@ func RegisterAssistantWorkspaceRoutes(api *gin.RouterGroup, svc *app.Service, ho
 		}
 		ok(c, result)
 	})
+	api.POST("/assistant/web-test", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !requireTrustedDesktopWritePrincipal(c, "需要受信任的本机界面测试联网搜索") {
+			return
+		}
+		if c.GetHeader(assistantHostTokenHeader) != "" {
+			fail(c, 403, app.BadAuthRequest("助手不能使用配置测试入口"))
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+		var request struct {
+			Query string `json:"query"`
+		}
+		if c.ShouldBindJSON(&request) != nil {
+			fail(c, 400, app.BadAuthRequest("测试搜索参数无效"))
+			return
+		}
+		result, err := svc.TestAssistantWebSearch(c.Request.Context(), user.ID, request.Query)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	group := api.Group("/assistant/projects/:projectId")
 	for _, action := range []string{"workspace/info", "workspace/files", "workspace/run", "workspace/runs", "workspace/install", "workspace/skill", "workspace/asset", "workspace/publish", "assets/search", "web/search", "web/read", "web/download"} {
 		group.POST("/"+action, func(c *gin.Context) {

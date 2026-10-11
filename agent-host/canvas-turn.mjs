@@ -8,6 +8,7 @@ export const SUPPORTED_APIS = ['openai-completions', 'openai-responses', 'anthro
 import { workflowHistory } from './workflow-journal.mjs';
 import { TOOL_CHECKPOINT_TYPE } from './turn-context.mjs';
 import { turnInstructions } from './turn-instructions.mjs';
+import { createTurnObserver } from './lifecycle-events.mjs';
 
 export function newTurnAccumulator() {
   return { turnId: '', seq: 0, toolSeq: 0, revisionBefore: 0, revisionAfter: 0,
@@ -108,10 +109,10 @@ export function turnContextPrefix({ canvasId, selectedNodeIds = [], references =
 
 // providerRegistration 构造要登记给 pi 的供应商：
 // 密钥以环境变量引用形式传入，宿主进程内解析，不写进 auth.json。
-export function providerRegistration({ api, baseUrl, modelId, maxTokens, contextWindow, maxImages = 0, maxImageBytes = 0 }) {
+export function providerRegistration({ api, baseUrl, modelId, maxTokens, contextWindow, maxImages = 0, maxImageBytes = 0, reasoningPolicy }) {
   return {
     name: 'Seal', baseUrl, apiKey: '$BEEFTV_AGENT_API_KEY', api,
-    models: [{ id: modelId, name: modelId, reasoning: false, input: maxImages > 0 ? ['text', 'image'] : ['text'],
+    models: [{ id: modelId, name: modelId, reasoning: false, ...reasoningPolicy?.model, input: maxImages > 0 ? ['text', 'image'] : ['text'],
       ...(maxImages > 0 && maxImageBytes > 0 ? { inputLimits: { images: { maxPerMessage: maxImages, maxPerRequest: maxImages,
         resize: { maxWidth: 2048, maxHeight: 2048, maxBytes: Math.floor(maxImageBytes * 4 / 3), jpegQuality: 85 } } } } : {}),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -127,16 +128,23 @@ export function providerUnavailableReason({ modelId, baseUrl, apiKey, api }) {
 }
 
 // SDK 终态消息而不是 Promise 是否 reject 决定模型调用是否成功。
-export function modelTurnCompletion(lastAssistantMessage, promptError = null, budgetFailure = null, { cancelled = false, timedOut = false } = {}) {
+export function modelTurnCompletion(lastAssistantMessage, promptError = null, budgetFailure = null, { cancelled = false, timedOut = false, idleTimedOut = false } = {}) {
   const reply = (lastAssistantMessage?.content || [])
     .filter((part) => part?.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text).join('');
   if (budgetFailure) return { reply, error: budgetFailure.message, errorReason: budgetFailure.reason };
+  if (idleTimedOut) return { reply, error: '模型长时间没有返回内容或进度，已停止等待。已有结果已保留，请检查网络或模型渠道后继续。', errorReason: 'model_idle_timeout' };
   if (timedOut) return { reply, error: '这一轮处理超时，已停止继续执行。', errorReason: 'turn_timeout' };
   if (cancelled) return { reply, error: null, errorReason: null };
   if (promptError) return { reply, error: String(promptError), errorReason: 'model_request_failed' };
   if (lastAssistantMessage?.stopReason === 'error') {
     return { reply, error: lastAssistantMessage.errorMessage || '模型调用没有完成', errorReason: 'model_request_failed' };
+  }
+  if (lastAssistantMessage?.stopReason === 'length') {
+    return { reply, error: '模型达到本次输出上限，制作尚未完成。已有操作与结果已保留；可继续任务，并检查模型输出限制，复杂场景需分段编写。', errorReason: 'model_output_truncated' };
+  }
+  if (lastAssistantMessage?.stopReason === 'aborted') {
+    return { reply, error: '模型响应被上游中断，制作尚未完成。已有结果已保留，请核对后继续。', errorReason: 'model_response_aborted' };
   }
   return { reply, error: null, errorReason: null };
 }
@@ -157,6 +165,24 @@ export function projectTurnHistory(entries, turnType, activeTurnId = '') {
       } });
     }
   }
+  const interrupted = new Map();
+  let progress = null;
+  for (const entry of entries) {
+    if (entry.type === 'custom' && entry.customType === `${turnType}.started`) {
+      progress = turns.get(entry.data?.turnId)?.finished ? null : createTurnObserver();
+      if (progress) interrupted.set(entry.data.turnId, progress);
+    } else if (entry.type === 'custom' && entry.customType === turnType) progress = null;
+    if (!progress || entry.type !== 'message') continue;
+    const message = entry.message;
+    if (message?.role === 'assistant') {
+      progress.handle({ type: 'message_start', message });
+      progress.handle({ type: 'message_end', message });
+      for (const part of message.content || []) if (part.type === 'toolCall') progress.handle({
+        type: 'tool_execution_start', toolCallId: part.id, toolName: part.name, args: part.arguments,
+      });
+    } else if (message?.role === 'toolResult') progress.handle({ type: 'tool_execution_end',
+      toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError, result: { content: message.content || [] } });
+  }
   return [...turns.values()]
     .filter((entry) => entry.finished || entry.data.turnId !== activeTurnId)
     .map((entry) => {
@@ -165,10 +191,16 @@ export function projectTurnHistory(entries, turnType, activeTurnId = '') {
       const completed = checkpoints.filter(item => item.state === 'completed').at(-1);
       const instructions = turnInstructions(entries, entry.data.turnId).map(item => ({ ...item,
         state: item.state === 'queued' ? 'not_processed' : item.state }));
+      const replayed = interrupted.get(entry.data.turnId);
+      const activity = new Map((replayed?.toolActivity || []).map(item => [item.toolCallId, item]));
+      for (const item of latest.values()) if (!activity.has(item.toolCallId) || activity.get(item.toolCallId).status === 'interrupted') {
+        activity.set(item.toolCallId, { ...activity.get(item.toolCallId), toolCallId: item.toolCallId, tool: item.tool,
+          status: item.state === 'running' ? 'interrupted' : item.state });
+      }
       return { ...entry.data, ...(!entry.finished ? {
-        toolCalls: [...latest.values()].map(item => ({ toolCallId: item.toolCallId, tool: item.tool, isError: item.state !== 'completed' })),
-        toolActivity: [...latest.values()].map(item => ({ toolCallId: item.toolCallId, tool: item.tool,
-          status: item.state === 'running' ? 'interrupted' : item.state })),
+        execution: replayed?.execution || [], finalMessageId: null,
+        toolCalls: [...activity.values()].map(item => ({ toolCallId: item.toolCallId, tool: item.tool, isError: item.status !== 'completed' })),
+        toolActivity: [...activity.values()],
         change: completed?.change?.revisionAfter > completed?.change?.revisionBefore ? completed.change : null,
         proposals: completed?.proposals || [],
       } : {}), checkpoints: [...latest.values()].map(({ change, proposals, ...item }) => item), instructions,

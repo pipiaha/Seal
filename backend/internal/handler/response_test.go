@@ -8,10 +8,33 @@ import (
 	"strings"
 	"testing"
 
+	"infinite-canvas/backend/internal/agentweb"
 	"infinite-canvas/backend/internal/app"
 
 	"github.com/gin-gonic/gin"
 )
+
+type searchFailureTransport struct{}
+
+func (searchFailureTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("fixture network failure; internal secret must stay private")
+}
+
+func TestSearchFailureShowsActionableMessage(t *testing.T) {
+	_, err := agentweb.SearchConfigured(t.Context(), &http.Client{Transport: searchFailureTransport{}}, agentweb.SearchConfig{Provider: "deepseek", APIKey: "fixture-key", BaseURL: agentweb.DeepSeekSearchBaseURL, Model: agentweb.DeepSeekSearchModel, MaxResults: 6}, "fixture")
+	if err == nil {
+		t.Fatal("failure fixture did not fail")
+	}
+	recorder, context := responseTestContext()
+	failService(context, err)
+	response := decodeFailureEnvelope(t, recorder)
+	if response.Msg == internalErrorMessage || !strings.Contains(response.Msg, "DeepSeek") {
+		t.Fatalf("search failure was hidden: status=%d msg=%s", recorder.Code, response.Msg)
+	}
+	if strings.Contains(recorder.Body.String(), "fixture-key") || strings.Contains(recorder.Body.String(), "internal secret") {
+		t.Fatal("internal details leaked")
+	}
+}
 
 type failureEnvelope struct {
 	Code   int    `json:"code"`

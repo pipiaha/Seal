@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Bun 直接执行 TypeScript 测试时需要保留扩展名；生产 tsconfig 不包含 test/。
-import { DEFAULT_VIDEO_PROMPT_MAX_CHARS, defaultModelCapabilityConfig, modelCapabilityConfigFor, normalizeVideoValue } from "../src/lib/model-capabilities.ts";
+import { DEFAULT_VIDEO_PROMPT_MAX_CHARS, defaultModelCapabilityConfig, modelCapabilityConfigFor, normalizeVideoValue, normalizeModelCapabilityConfig } from "../src/lib/model-capabilities.ts";
 import { modelCompatibilityError } from "../src/lib/model-selection.ts";
 import type { AiConfig } from "../src/stores/use-config-store.ts";
+
+test('text models allow images by default, including missing reference settings, and preserve explicit disable', () => {
+    const fresh = defaultModelCapabilityConfig('chat-completion', 'deepseek-flash').text!;
+    assert.equal(fresh.references.maxImages, 8);
+    assert.equal(fresh.references.maxImageBytes, 4 * 1024 * 1024);
+    const missing = modelCapabilityConfigFor(JSON.parse('{"channels":[{"id":"direct","models":["vision"],"modelProfiles":[{"model":"vision","protocol":"chat-completion","capabilityConfig":{"version":1,"text":{"contextWindow":200000}}}]}]}'), 'direct::vision').text!;
+    assert.equal(missing.references.maxImages, 8);
+    assert.equal(missing.references.maxImageBytes, 4 * 1024 * 1024);
+    const disabled = normalizeModelCapabilityConfig({ version: 1, text: { ...fresh, references: { ...fresh.references, maxImages: 0, maxImageBytes: 0 } } }).text!;
+    assert.equal(disabled.references.maxImages, 0);
+    assert.equal(disabled.references.maxImageBytes, 0);
+});
 
 test("FullVideo full models accept one or two image references as well as mixed video references", () => {
     for (const name of ["sd-native-full-2.0", "sd-native-full-2.5", "原生不卡人脸-全参2.0", "原生不卡人脸-全参2.5"]) {

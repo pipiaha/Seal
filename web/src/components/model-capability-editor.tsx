@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { defaultImageCapabilityConfig, defaultModelCapabilityConfig, normalizeModelCapabilityConfig, type ImageCapabilityConfig, type ModelCapabilityConfig, type TextCapabilityConfig, type VideoCapabilityConfig } from "@/lib/model-capabilities";
 import type { ModelProtocol } from "@/lib/model-protocols";
 import { VIDEO_RESOLUTION_CAPABILITY_OPTIONS } from "@/lib/video-generation-options";
+import { TextExecutionSettings } from "./text-execution-settings";
 
 const ratioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 const operationOptions = [
@@ -32,13 +33,14 @@ type Props = {
     protocol?: ModelProtocol;
     capability?: "text" | "image" | "video";
     model?: string;
+    baseUrl?: string;
     disabled?: boolean;
     section?: "all" | "protocol" | "references";
 };
 
-export function ModelCapabilityEditor({ value, onChange, protocol, capability = "video", model = "", disabled = false, section = "all" }: Props) {
+export function ModelCapabilityEditor({ value, onChange, protocol, capability = "video", model = "", baseUrl = "", disabled = false, section = "all" }: Props) {
     if (capability === "text") {
-        return <TextCapabilityEditor value={value} onChange={onChange} protocol={protocol} disabled={disabled} section={section} />;
+        return <TextCapabilityEditor value={value} onChange={onChange} protocol={protocol} model={model} baseUrl={baseUrl} disabled={disabled} section={section} />;
     }
     if (capability === "image") {
         return <ImageCapabilityEditor value={value} onChange={onChange} protocol={protocol} model={model} disabled={disabled} section={section} />;
@@ -349,8 +351,9 @@ export function ModelCapabilityEditor({ value, onChange, protocol, capability = 
     );
 }
 
-function TextCapabilityEditor({ value, onChange, protocol, disabled, section }: Pick<Props, "value" | "onChange" | "protocol" | "disabled" | "section">) {
-    const profile = value?.text || defaultModelCapabilityConfig(protocol).text!;
+function TextCapabilityEditor({ value, onChange, protocol, model, baseUrl, disabled, section }: Pick<Props, "value" | "onChange" | "protocol" | "model" | "baseUrl" | "disabled" | "section">) {
+    const defaults = defaultModelCapabilityConfig(protocol).text!;
+    const profile = { ...defaults, ...value?.text, references: { ...defaults.references, ...value?.text?.references } };
     const update = (patch: Partial<TextCapabilityConfig>) => {
         onChange?.({ version: 1, text: { ...profile, ...patch } });
     };
@@ -364,6 +367,7 @@ function TextCapabilityEditor({ value, onChange, protocol, disabled, section }: 
                 <CapabilityGroup title="输出方式" description="控制向上游文本模型请求的响应方式。">
                     <ParameterField label="SSE 流式输出" description="启用后发送 stream=true，并实时推送文本增量；关闭时等待完整 JSON 响应。" supported={profile.streaming !== false} disabled={Boolean(disabled)} onChange={(streaming) => update({ streaming })} />
                 </CapabilityGroup>
+                <TextExecutionSettings value={profile} model={model || ""} protocol={protocol || ""} baseUrl={baseUrl} disabled={disabled} onChange={update} />
             </div>
         );
     }
@@ -392,8 +396,9 @@ function TextCapabilityEditor({ value, onChange, protocol, disabled, section }: 
         <div className="admin-capability-editor space-y-3 rounded-md bg-muted/20 p-3">
             <div>
                 <div className="text-sm font-medium">文本理解能力</div>
-                <div className="mt-0.5 text-[var(--fs-tiny)] text-foreground/48">默认不假设支持图片或视频，只有明确配置后相关请求才会进入该模型。</div>
+                <div className="mt-0.5 text-[var(--fs-tiny)] text-foreground/48">默认允许图片输入；纯文字模型可将图片数量设为 0 关闭。视频原文件输入需另行配置。</div>
             </div>
+            <TextExecutionSettings value={profile} model={model || ""} protocol={protocol || ""} baseUrl={baseUrl} disabled={disabled} onChange={update} />
             <CapabilityGroup title="图片" description="文本模型可接收的图片参考范围">
                 <div className="grid gap-3 sm:grid-cols-2">
                     <NumberField label="最大参考图片数" value={profile.references.maxImages} min={0} max={100} disabled={Boolean(disabled)} onChange={(next) => updateReferences({ maxImages: next || 0 })} />

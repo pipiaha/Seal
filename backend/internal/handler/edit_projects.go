@@ -50,7 +50,6 @@ func RegisterEditProjectRoutes(api gin.IRouter, svc *app.Service, host *editrunt
 				c.JSON(403, gin.H{"code": 403, "reason": "turn_scope_mismatch", "msg": "助手轮次与当前项目不匹配"})
 				return false
 			}
-			c.Set("editingTurnAssets", scope.AssetIDs)
 		}
 		return true
 	}
@@ -108,19 +107,6 @@ func RegisterEditProjectRoutes(api gin.IRouter, svc *app.Service, host *editrunt
 			if c.ShouldBindJSON(&payload) != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "素材导入请求无效"})
 				return
-			}
-			if assets, exists := c.Get("editingTurnAssets"); exists {
-				allowed := false
-				for _, id := range assets.([]string) {
-					if id == payload.AssetID {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
-					c.JSON(403, gin.H{"code": 403, "reason": "asset_out_of_scope", "msg": "请在当前对话中引用该素材"})
-					return
-				}
 			}
 			importer := svc.ImportEditingAsset
 			if c.Param("action") == "/hypit/assets/import" {

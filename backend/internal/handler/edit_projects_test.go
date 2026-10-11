@@ -54,7 +54,7 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 	router := gin.New()
 	router.Use(RuntimeDependenciesMiddleware(RuntimeDependencies{DesktopTrust: func(r *http.Request) bool {
 		return r.Header.Get("X-Desktop-Token") == "launch" && r.Header.Get("X-Beeftv-UI-Bootstrap") == "ui"
-	}}))
+	}, RequestCoordinator: &stubRequestCoordinator{allowed: true}}))
 	RegisterEditProjectRoutes(router.Group("/api"), svc, nil)
 	RegisterAssistantCreatorRoutes(router.Group("/api"), svc, nil)
 	RegisterAssistantMediaRoutes(router.Group("/api"), svc)
@@ -93,7 +93,7 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 		{"edit_canvas", "skills/list", map[string]string{"X-Desktop-Token": "launch", "X-Beeftv-UI-Bootstrap": "ui", assistantTurnHeader: turnID}, 403},
 		{"edit_canvas", "skills/list", map[string]string{assistantHostTokenHeader: "host-test", assistantTurnHeader: turnID, "X-Beeftv-Client": "external"}, 403},
 		{"edit_canvas", "media/accept/any", validHost, 403},
-		{"edit_canvas", "media/transcribe", validHost, 403},
+		{"edit_canvas", "media/transcribe", validHost, 400},
 	} {
 		if result := creatorCall(probe.project, probe.action, probe.headers); result.Code != probe.status {
 			t.Fatalf("creator %s %s: %d %s", probe.project, probe.action, result.Code, result.Body.String())
@@ -139,11 +139,22 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 	}
 	guarded := gin.New()
 	RegisterEditProjectRoutes(guarded.Group("/api"), svc, editruntime.New(t.TempDir()))
+	for _, asset := range []model.Asset{
+		{ID: "owned_not_referenced", UserID: owner.ID, Kind: "image", Status: model.AssetVersionStatusConfirmed, PayloadJSON: `{"data":{}}`},
+		{ID: "foreign_asset", UserID: "foreign", Kind: "image", Status: model.AssetVersionStatusConfirmed, PayloadJSON: `{"data":{}}`},
+	} {
+		if err := db.Create(&asset).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, probe := range []struct {
 		action, body, reason string
 		status               int
 	}{
-		{"hypit/assets/import", `{"assetId":"not_referenced","operationId":"op","expectedRevision":0}`, "asset_out_of_scope", 403},
+		{"hypit/assets/import", `{"assetId":"owned_not_referenced","operationId":"op","expectedRevision":0}`, "素材还没有保存到本地资产库", 409},
+		{"assets/import", `{"assetId":"owned_not_referenced","operationId":"op","expectedRevision":0}`, "素材还没有保存到本地资产库", 409},
+		{"hypit/assets/import", `{"assetId":"foreign_asset","operationId":"op","expectedRevision":0}`, "asset_import_failed", 404},
+		{"assets/import", `{"assetId":"foreign_asset","operationId":"op","expectedRevision":0}`, "asset_import_failed", 404},
 		{"promote", `{"candidateId":"candidate","operationId":"op","expectedRevision":0}`, "candidate_review_required", 403},
 		{"promote", `null`, "候选提交无效", 400},
 	} {

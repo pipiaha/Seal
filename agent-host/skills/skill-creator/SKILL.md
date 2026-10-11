@@ -28,6 +28,9 @@ prove behavioral quality; do not label an untested workflow as verified.
 Use inspect/validate before saving, preserve old versions and require the expected
 version for updates. Saved changes load on the next conversation turn through the
 existing immutable Skill snapshot; a task already running keeps its original copy.
-No arbitrary shell, Python script execution, dependency installation or additional
-external authority is granted by a Skill. If an execution tool is unavailable,
-report the missing capability instead of inventing a successful installation.
+Copy enabled helpers with workspace_skill, then use workspace_run for JS/Python
+and workspace_install for project dependencies. Scripts use the current OS user's
+full local file/network access without extra script approval. Check actual runtime
+availability; report missing capabilities rather than inventing a successful run.
+Respect the user's task scope and product paid-generation approvals. Never persist
+application credentials or claim the working directory is a security sandbox.

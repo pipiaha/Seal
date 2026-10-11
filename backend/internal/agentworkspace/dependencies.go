@@ -13,8 +13,8 @@ import (
 var npmPackage = regexp.MustCompile(`^(?:@[a-z0-9._-]+/)?[a-z0-9][a-z0-9._-]*(?:@[a-zA-Z0-9.+_-]+)?$`)
 var pipPackage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:==[a-zA-Z0-9.+_-]+)?$`)
 
-// Installers run with the same lowbox identity and process-tree cancellation as
-// Skill scripts. They cannot add global packages or credentials.
+// Installers use the same full-access runner and cancellation as Skill scripts.
+// These helpers target project dependencies and do not forward application keys.
 func (m *Manager) Install(ctx context.Context, w *Workspace, kind string, packages []string, id, node, python string) (*RunResult, error) {
 	if !operation.MatchString(id) || len(packages) == 0 || len(packages) > 16 {
 		return nil, errors.New("package_request_invalid")
@@ -34,7 +34,7 @@ func (m *Manager) Install(ctx context.Context, w *Workspace, kind string, packag
 	var code string
 	relative := ".seal/install-" + id + ".js"
 	if kind == "node" {
-		executable, err := m.stageRuntime(node, "node")
+		executable, err := runtimeExecutable(node)
 		if err != nil {
 			return nil, err
 		}
@@ -49,9 +49,9 @@ func (m *Manager) Install(ctx context.Context, w *Workspace, kind string, packag
 		code = `import os,sys,subprocess,venv,json
 root=os.getcwd()
 envdir=os.path.join(root,'.venv')
-if not os.path.exists(os.path.join(envdir,'Scripts','python.exe')):
+exe=os.path.join(envdir,'Scripts','python.exe') if os.name=='nt' else os.path.join(envdir,'bin','python')
+if not os.path.exists(exe):
     venv.EnvBuilder(with_pip=True,symlinks=False).create(envdir)
-exe=os.path.join(envdir,'Scripts','python.exe')
 env=dict(os.environ)
 env['PIP_CONFIG_FILE']=os.devnull
 subprocess.run([exe,'-m','pip','install','--disable-pip-version-check','--timeout','10','--retries','1','--index-url','https://pypi.org/simple',*json.loads(` + fmt.Sprintf("%q", string(encoded)) + `)],env=env,check=True)

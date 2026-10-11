@@ -9,6 +9,13 @@ export type ModelCapabilityConfig = {
 };
 
 export type TextCapabilityConfig = {
+    /** Agent request budget, including reasoning. */
+    maxOutputTokens?: number;
+    outputTokenLimit?: number;
+    contextWindow?: number;
+    reasoningFormat?: "auto" | "none" | "openai" | "deepseek" | "openrouter" | "zai" | "qwen" | "anthropic-adaptive" | "anthropic-budget";
+    reasoningEffort?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+    reasoningLevels?: Array<"off" | "low" | "medium" | "high" | "xhigh" | "max">;
     /** Whether the upstream text endpoint accepts SSE streaming responses. */
     streaming?: boolean;
     /** Whether the model exposes a user-selectable reasoning/thinking mode. */
@@ -470,8 +477,10 @@ export function defaultImageCapabilityConfig(protocol?: ModelProtocol, model = "
 export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = ""): ModelCapabilityConfig {
     const text: TextCapabilityConfig = {
         streaming: true,
-        // 文本模型的视觉能力必须由管理员明确开启，不能根据模型名猜测。
-        references: { promptMaxChars: 32000, maxImages: 0, maxImageBytes: 0, maxVideos: 0, maxVideoBytes: 0 },
+        maxOutputTokens: 49152,
+        contextWindow: 200000,
+        reasoningFormat: "auto",
+        references: { promptMaxChars: 32000, maxImages: 8, maxImageBytes: 4 * 1024 * 1024, maxVideos: 0, maxVideoBytes: 0 },
     };
     const video: VideoCapabilityConfig = {
         references: {

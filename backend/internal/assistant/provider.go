@@ -15,6 +15,7 @@ const (
 	ReasonModelNotConfigured  = "model_not_configured"
 	ReasonCredentialMissing   = "credential_missing"
 	ReasonProtocolUnsupported = "model_protocol_unsupported"
+	ReasonParametersInvalid   = "model_parameters_invalid"
 )
 
 // UnavailableError 承载稳定 reason，让 handler 直接投影成契约里的状态。
@@ -38,13 +39,18 @@ type Provider struct {
 	ChannelID   string
 	ChannelName string
 	// Model 是渠道内的模型 id（不含 channel:: 前缀）；ModelKey 是配置里的原值。
-	Model         string
-	ModelKey      string
-	Protocol      string
-	BaseURL       string
-	APIKey        string
-	MaxImages     int
-	MaxImageBytes int
+	Model           string
+	ModelKey        string
+	Protocol        string
+	BaseURL         string
+	APIKey          string
+	MaxImages       int
+	MaxImageBytes   int
+	MaxOutputTokens int
+	ContextWindow   int
+	ReasoningFormat string
+	ReasoningEffort string
+	ReasoningLevels []string
 }
 
 // Fingerprint 是「当前生效的供应商配置」的稳定指纹：变化即说明宿主环境已过期。
@@ -53,6 +59,7 @@ func (p Provider) Fingerprint() string {
 	sum := sha256.Sum256([]byte(p.APIKey))
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		p.ChannelID, p.Model, p.BaseURL, p.Protocol, hex.EncodeToString(sum[:]), fmt.Sprint(p.MaxImages), fmt.Sprint(p.MaxImageBytes),
+		fmt.Sprint(p.MaxOutputTokens), fmt.Sprint(p.ContextWindow), p.ReasoningFormat, p.ReasoningEffort, strings.Join(p.ReasoningLevels, ","),
 	}, "\x00")))
 	return hex.EncodeToString(digest[:])
 }

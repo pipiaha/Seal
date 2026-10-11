@@ -42,6 +42,7 @@ describe("单轮预算", () => {
         expect(spendToolStep(budget).allowed).toBe(true);
         const denied = spendToolStep(budget);
         expect(denied.reason).toBe("turn_tool_step_budget_exhausted");
+        expect(budget.failure).toBe(denied);
         const error = budgetError(denied);
         expect(error.reason).toBe("turn_tool_step_budget_exhausted");
         expect(error.message).toContain("下一轮");
@@ -49,7 +50,10 @@ describe("单轮预算", () => {
 
     test("max 为 0 或缺失时不限制，而不是立刻拒绝", () => {
         const budget = createTurnBudget({});
-        for (let index = 0; index < 5; index += 1) expect(spendModelRequest(budget).allowed).toBe(true);
+        for (let index = 0; index < 80; index += 1) {
+            expect(spendModelRequest(budget).allowed).toBe(true);
+            expect(spendToolStep(budget).allowed).toBe(true);
+        }
         expect(spendToolStep(undefined).allowed).toBe(true);
     });
 });

@@ -1,6 +1,7 @@
 package assistantruntime
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +33,16 @@ func (h *Host) buildEnv(provider assistant.Provider, pin childPin) []string {
 	set("BEEFTV_AGENT_API_KEY", provider.APIKey)
 	set("BEEFTV_AGENT_MAX_IMAGES", strconv.Itoa(provider.MaxImages))
 	set("BEEFTV_AGENT_MAX_IMAGE_BYTES", strconv.Itoa(provider.MaxImageBytes))
+	if provider.MaxOutputTokens > 0 {
+		set("BEEFTV_AGENT_MAX_TOKENS", strconv.Itoa(provider.MaxOutputTokens))
+	}
+	if provider.ContextWindow > 0 {
+		set("BEEFTV_AGENT_CONTEXT_WINDOW", strconv.Itoa(provider.ContextWindow))
+	}
+	set("BEEFTV_AGENT_REASONING_FORMAT", provider.ReasoningFormat)
+	set("BEEFTV_AGENT_REASONING_EFFORT", provider.ReasoningEffort)
+	levels, _ := json.Marshal(provider.ReasoningLevels)
+	set("BEEFTV_AGENT_REASONING_LEVELS", string(levels))
 	if pin.Port > 0 {
 		set("BEEFTV_AGENT_PORT", strconv.Itoa(pin.Port))
 	} else {
@@ -95,7 +106,7 @@ func stripInheritedKey(key string) bool {
 func agentTunableKey(upper string) bool {
 	switch upper {
 	case "BEEFTV_AGENT_MAX_TOKENS", "BEEFTV_AGENT_CONTEXT_WINDOW",
-		"BEEFTV_AGENT_TURN_TIMEOUT_MS", "BEEFTV_AGENT_MAX_REQUESTS_PER_TURN",
+		"BEEFTV_AGENT_TURN_TIMEOUT_MS", "BEEFTV_AGENT_IDLE_TIMEOUT_MS", "BEEFTV_AGENT_MAX_REQUESTS_PER_TURN",
 		"BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN", "BEEFTV_AGENT_TOTAL_REQUEST_BUDGET",
 		"BEEFTV_AGENT_ALLOWED_ORIGIN", "BEEFTV_AGENT_READ_ONLY",
 		"BEEFTV_AGENT_MAX_REQUESTS":

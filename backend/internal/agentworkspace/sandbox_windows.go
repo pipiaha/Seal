@@ -95,19 +95,39 @@ func runSandbox(ctx context.Context, root, executable string, args, env []string
 	if err := grant(filepath.Dir(executable), sid, false); err != nil {
 		return -1, fmt.Errorf("runtime ACL: %w", err)
 	}
-	internet, err := windows.StringToSid("S-1-15-3-1")
-	if err != nil {
+	return runWindowsProcess(ctx, root, executable, args, env, output, sid)
+}
+
+func runLocalProcess(ctx context.Context, root, executable string, args, env []string, output io.Writer) (int, error) {
+	return runWindowsProcess(ctx, root, executable, args, env, output, nil)
+}
+
+// Ordinary scripts keep the caller's token. The Job Object owns cancellation,
+// not file or network permissions; only the optional lowbox adds those limits.
+func runWindowsProcess(ctx context.Context, root, executable string, args, env []string, output io.Writer, sid *windows.SID) (int, error) {
+	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
-	cap := windows.SIDAndAttributes{Sid: internet, Attributes: windows.SE_GROUP_ENABLED}
-	security := securityCapabilities{SID: sid, Capabilities: &cap, Count: 1}
-	attributes, err := windows.NewProcThreadAttributeList(2)
+	count := uint32(1)
+	if sid != nil {
+		count++
+	}
+	attributes, err := windows.NewProcThreadAttributeList(count)
 	if err != nil {
 		return -1, err
 	}
 	defer attributes.Delete()
-	if err = attributes.Update(0x20009, unsafe.Pointer(&security), unsafe.Sizeof(security)); err != nil {
-		return -1, err
+	var security securityCapabilities
+	if sid != nil {
+		internet, err := windows.StringToSid("S-1-15-3-1")
+		if err != nil {
+			return -1, err
+		}
+		cap := &windows.SIDAndAttributes{Sid: internet, Attributes: windows.SE_GROUP_ENABLED}
+		security = securityCapabilities{SID: sid, Capabilities: cap, Count: 1}
+		if err = attributes.Update(0x20009, unsafe.Pointer(&security), unsafe.Sizeof(security)); err != nil {
+			return -1, err
+		}
 	}
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -135,15 +155,20 @@ func runSandbox(ctx context.Context, root, executable string, args, env []string
 	}
 	defer windows.CloseHandle(job)
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_ACTIVE_PROCESS | windows.JOB_OBJECT_LIMIT_JOB_MEMORY
-	limits.BasicLimitInformation.ActiveProcessLimit = 16
-	limits.JobMemoryLimit = 2 << 30
+	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if sid != nil {
+		limits.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_ACTIVE_PROCESS | windows.JOB_OBJECT_LIMIT_JOB_MEMORY
+		limits.BasicLimitInformation.ActiveProcessLimit = 16
+		limits.JobMemoryLimit = 2 << 30
+	}
 	if _, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return -1, err
 	}
-	uiLimits := uint32(0xff) // clipboard, other windows, desktop and system UI settings
-	if _, err = windows.SetInformationJobObject(job, windows.JobObjectBasicUIRestrictions, uintptr(unsafe.Pointer(&uiLimits)), uint32(unsafe.Sizeof(uiLimits))); err != nil {
-		return -1, err
+	if sid != nil {
+		uiLimits := uint32(0xff)
+		if _, err = windows.SetInformationJobObject(job, windows.JobObjectBasicUIRestrictions, uintptr(unsafe.Pointer(&uiLimits)), uint32(unsafe.Sizeof(uiLimits))); err != nil {
+			return -1, err
+		}
 	}
 	startup := windows.StartupInfoEx{StartupInfo: windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESTDHANDLES, StdInput: handles[1], StdOutput: handles[0], StdErr: handles[0]}, ProcThreadAttributeList: attributes.List()}
 	app, _ := windows.UTF16PtrFromString(executable)
@@ -154,9 +179,10 @@ func runSandbox(ctx context.Context, root, executable string, args, env []string
 	cwd, _ := windows.UTF16PtrFromString(root)
 	// UTF16FromString rejects interior NULs; construct the environment block explicitly.
 	environment := []uint16{}
-	// Windows builds the lowbox profile from these non-secret OS locations even
-	// with an explicit environment. They are not filesystem access grants.
-	env = append(env, "USERPROFILE="+os.Getenv("USERPROFILE"), "LOCALAPPDATA="+os.Getenv("LOCALAPPDATA"), "APPDATA="+root, "SystemDrive="+os.Getenv("SystemDrive"), "WINDIR="+os.Getenv("WINDIR"))
+	if sid != nil {
+		// Windows needs these OS locations to build an AppContainer profile.
+		env = append(env, "USERPROFILE="+os.Getenv("USERPROFILE"), "LOCALAPPDATA="+os.Getenv("LOCALAPPDATA"), "APPDATA="+root, "SystemDrive="+os.Getenv("SystemDrive"), "WINDIR="+os.Getenv("WINDIR"))
+	}
 	for _, value := range env {
 		v, e := windows.UTF16FromString(value)
 		if e != nil {

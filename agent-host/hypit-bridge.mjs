@@ -25,7 +25,7 @@ export function createHypitBridge({ opsUrl, hostToken, desktopToken, turnBudgetC
       properties: { command: { type: 'string', enum: ['check', 'plan', 'build'] }, source: { type: 'string' }, compositionOutput: { type: 'string' }, timelineOutput: { type: 'string' } }, required: ['command', 'source'] },
     { name: 'hypit_job_status', action: 'status', readOnly: true, description: 'Read actual production progress and result. A submitted job is not a finished video.', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
     { name: 'hypit_jobs', action: 'list', readOnly: true, description: 'List current project production jobs, including saved results after reopening.', properties: {} },
-    { name: 'hypit_import_asset', action: 'assets/import', description: 'Copy a saved, referenced asset into the current Hypit author project. Returns a relative file and inputId. Use it as an existing local resource; do not download arbitrary URLs.',
+    { name: 'hypit_import_asset', action: 'assets/import', description: 'Copy any current-user-owned saved asset into the current Hypit author project. Find its ID with assets_search; no prior conversation attachment is required. Returns a relative file and inputId. Use it as an existing local resource.',
       properties: { assetId: { type: 'string' } }, required: ['assetId'] },
     { name: 'hypit_reference_frames', action: 'frames', readOnly: true, description: 'View an imported image or up to eight frames from a reference video. Times are seconds within the saved duration. Returns actual images for visual reference analysis.',
       properties: { inputId: { type: 'string' }, times: { type: 'array', items: { type: 'number' }, minItems: 1, maxItems: 8 } }, required: ['inputId'] },

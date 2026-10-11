@@ -3,10 +3,30 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { collectTurnEffects, newTurnAccumulator, providerRegistration, providerUnavailableReason,
-  resetTurnAccumulator, sessionTitle, turnChange, turnContextPrefix, unflushedSessionHistory } from "./canvas-turn.mjs";
+  resetTurnAccumulator, sessionTitle, turnChange, turnContextPrefix, unflushedSessionHistory, projectTurnHistory } from "./canvas-turn.mjs";
 import { SYSTEM_PROMPT } from "./full-control-loader.mjs";
 
 const serverSource = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+
+test('未结算轮次从官方消息恢复说明和工具结果，保留中断状态且不暴露思考', () => {
+    const kind = 'beeftv.canvas.turn';
+    const entries = [
+        { type: 'custom', customType: kind + '.started', data: { turnId: 'unfinished', userText: '制作视频' } },
+        { type: 'message', message: { role: 'assistant', content: [
+            { type: 'thinking', thinking: 'private-thought' }, { type: 'text', text: '先读取场景。' },
+            { type: 'toolCall', id: 'read-scene', name: 'read', arguments: { path: 'scene.html' } },
+            { type: 'toolCall', id: 'pending', name: 'workspace_info', arguments: {} },
+        ] } },
+        { type: 'message', message: { role: 'toolResult', toolCallId: 'read-scene', toolName: 'read', isError: false, content: [{ type: 'text', text: '场景内容' }] } },
+    ];
+    const [turn] = projectTurnHistory(entries, kind);
+    expect(turn.errorReason).toBe('turn_interrupted');
+    expect(turn.execution[0].text).toBe('先读取场景。');
+    expect(turn.toolActivity[0].detail).toEqual({ input: '{\n  "path": "scene.html"\n}', output: '场景内容' });
+    expect(turn.toolActivity[1].status).toBe('interrupted');
+    expect(JSON.stringify(turn)).not.toContain('private-thought');
+    expect(projectTurnHistory(entries, kind, 'unfinished')).toEqual([]);
+});
 
 describe("本轮画布变更", () => {
     test("从成功的工具结果累计新建节点、改动节点与新建连线", () => {
@@ -180,6 +200,12 @@ describe("回合上下文", () => {
 });
 
 import { modelTurnCompletion } from './canvas-turn.mjs';
+
+test('达到输出上限且只有思考的回复不能被标记为成功', () => {
+    const result = modelTurnCompletion({ role: 'assistant', content: [{ type: 'thinking', thinking: 'partial reasoning' }], stopReason: 'length', usage: { output: 4096, reasoning: 4096 } });
+    expect(result.errorReason).toBe('model_output_truncated');
+    expect(result.error).toContain('输出');
+});
 
 describe('模型终态投影', () => {
   test('用户停止不变成模型失败，超时保留独立原因', () => {

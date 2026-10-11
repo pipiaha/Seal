@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { chromium, type Browser } from "playwright";
 import { createModelChannel, defaultConfig } from "@/stores/use-config-store";
 
@@ -103,6 +103,49 @@ test("models-only local default is selectable and survives reload", async () => 
     }
     expect(saved.assistantModel).toBe("");
     expect(saved.textModel).toBe("newapi-local::deepseek-v4-flash:free");
+    await page.close();
+}, 30000);
+
+test("thinking selection uses supported levels, persists and disables while busy", async () => {
+    saved = { ...defaultConfig, assistantModel: "ds::deepseek-flash", channels: [createModelChannel({ id: "ds", models: ["deepseek-flash"], baseUrl: "https://api.deepseek.com/v1", apiFormat: "openai", modelProfiles: [{ model: "deepseek-flash", capability: "text", protocol: "chat-completion" }] })] };
+    const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
+    await page.goto(server.url.toString());
+    const picker = page.getByRole("combobox", { name: "助手思考强度" });
+    await picker.click();
+    expect(await page.locator('.ant-select-item-option-content').allTextContents()).toEqual(["关闭思考", "低", "高", "最大"]);
+    await page.locator('.ant-select-item-option-content').filter({ hasText: /^低$/ }).click();
+    await page.waitForTimeout(150);
+    expect(saved.channels[0].modelProfiles?.[0].capabilityConfig?.text?.reasoningEffort).toBe("low");
+    expect(saved.channels[0].modelProfiles?.[0].capabilityConfig?.text?.maxOutputTokens).toBe(49152);
+    await page.reload();
+    expect(await page.locator('.canvas-assistant-reasoning').innerText()).toBe("低");
+    for (let i = 0; i < 2; i++) {
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.getByRole("button", { name: "切换主题" }).click();
+    }
+    await page.getByRole("button", { name: "切换忙碌" }).click();
+    expect(await picker.isDisabled()).toBe(true);
+    await page.close();
+}, 30000);
+
+test("model settings exposes 48K and saves actual execution parameters", async () => {
+    saved = { ...defaultConfig, assistantModel: "ds::deepseek-flash", channels: [createModelChannel({ id: "ds", models: ["deepseek-flash"], baseUrl: "https://api.deepseek.com/v1", apiFormat: "openai", modelProfiles: [{ model: "deepseek-flash", capability: "text", protocol: "chat-completion" }] })] };
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
+    await page.goto(new URL("/parameters", server.url).toString());
+    await page.getByRole("button", { name: "配置使用" }).click();
+    await page.getByRole("tab", { name: "能力与参数" }).click();
+    const budget = page.getByRole("spinbutton", { name: "单次输出预算", exact: true });
+    expect(await budget.inputValue()).toBe("49152");
+    await page.getByRole("combobox", { name: "默认思考强度" }).click();
+    await page.locator('.ant-select-item-option-content').filter({ hasText: /^低$/ }).click();
+    await page.waitForTimeout(150);
+    expect(saved.channels[0].modelProfiles?.[0].capabilityConfig?.text?.reasoningEffort).toBe("low");
+    await budget.fill("32768"); await budget.press("Tab");
+    await page.waitForTimeout(150);
+    expect(saved.channels[0].modelProfiles?.[0].capabilityConfig?.text?.maxOutputTokens).toBe(32768);
+    const cache = import.meta.dir + "/../../.local/cache";
+    mkdirSync(cache, { recursive: true });
+    await page.screenshot({ path: cache + "/agent-output-settings.png" });
     await page.close();
 }, 30000);
 

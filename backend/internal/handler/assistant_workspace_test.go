@@ -52,6 +52,12 @@ func TestAssistantWorkspaceRoutesRequireOwnedOpenTurn(t *testing.T) {
 	if r := call("PUT", "assistant/web-settings", `{"enabled":true,"apiKey":"forged"}`, turn, true); r.Code != 403 {
 		t.Fatal("host changed search credentials", r.Code)
 	}
+	if r := call("POST", "assistant/web-test", `{"query":"fixture"}`, turn, true); r.Code != 403 {
+		t.Fatal("host used UI search test endpoint", r.Code)
+	}
+	if r := call("POST", "assistant/web-test", `{"query":"fixture"}`, "", false); r.Code == 200 || !strings.Contains(r.Body.String(), "启用搜索") {
+		t.Fatal("UI test did not respect disabled search", r.Code, r.Body.String())
+	}
 	if r := call("PUT", "assistant/web-settings", `{"enabled":true,"apiKey":"fixture"}`, "", false); r.Code != 200 {
 		t.Fatal("trusted UI rejected", r.Code, r.Body.String())
 	}

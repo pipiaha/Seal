@@ -11,6 +11,8 @@ description: Seal后端核心持久化表与状态边界
 
 ### 本地模型配置加密
 
+文字模型的 `modelProfiles[].capabilityConfig.text` 保存助手执行参数：`maxOutputTokens`（默认49152）、可选 `outputTokenLimit`、`contextWindow`（默认200000）、`reasoningFormat`（默认auto）、`reasoningEffort` 与 `reasoningLevels`。输出上限与预算取较小值；实际请求还受剩余上下文约束。参数参与助手供应商指纹，空闲时更新宿主；当前轮次固定启动时参数。它们保存在原加密配置中，不新增数据库表。思考格式自动识别失败时不发送控制参数，界面允许明确配置格式和真实支持的档位。
+
 `local-model-config.json` 和它的 `.bak` 使用 `schemaVersion: 2` 外层封装，`encryptedConfig` 为 AES-GCM 密文。解密后仍使用原有 provider state、revision 与助手默认授权记录；保存冲突校验保持不变。API Key、Secret Key 和自定义 Header 值不以明文保存在这些文件或持久任务输入中。明文旧配置可以读取，在下一次成功保存时连同备份迁移。
 
 加密密钥是工作区的 `.settings-key`，备份和恢复必须包含它。密钥丢失或损坏时拒绝解密和覆盖现有配置，不自动创建替代密钥。文件加密不能防止拥有同一工作区读取权限的程序访问凭据。
@@ -169,7 +171,7 @@ $env:CANVAS_DESKTOP_DATA_DIR = 'D:\Seal-tests\candidate-workspace'
 
 ## 账号认证与密码找回
 
-助手联网配置复用 `system_settings`，键为 `assistant-web:<sha256(userId)>`，JSON 保存 enabled 和加密的 apiKey；configured 仅为读取投影，不暴露密钥。工程脚本回执位于 `agent-workspaces/projects/<scope>/receipts`，与可写 work 目录隔离，不新增数据库表。素材导入继续使用 resources 和 assets 的归属、验证及去重合同。
+助手联网配置复用 `system_settings`，键为 `assistant-web:<sha256(userId)>`，JSON 保存 enabled、provider、credentialSource、channelId、baseUrl、model、maxResults，以及分别加密的 tavilyKey、deepseekKey。旧 apiKey 读取时保留为 Tavily 密钥；下一次保存写入新结构。渠道复用只保存引用，执行时从本机模型配置读取当前凭证；configured、configurationError 仅为读取投影，不暴露密钥，不新增结构迁移。工程脚本回执位于 `agent-workspaces/projects/<scope>/receipts`，与 work 分目录组织，不新增数据库表；完全访问脚本拥有系统账户文件权限，此布局不是隔离保证。素材导入继续使用 resources 和 assets 的归属、验证及去重合同。
 
 | 表 | 用途 | 关键边界 |
 | --- | --- | --- |

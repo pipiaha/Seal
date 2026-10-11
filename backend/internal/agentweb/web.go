@@ -28,16 +28,16 @@ func source(url, title, text, date string) Source {
 	sum := sha256.Sum256([]byte(url))
 	return Source{ID: "web_" + hex.EncodeToString(sum[:8]), Title: title, URL: url, Excerpt: text, PublishedDate: date}
 }
-func Client() *http.Client { return outbound.PublicHTTPClient(25 * time.Second) }
+func Client() *http.Client       { return outbound.PublicHTTPClient(25 * time.Second) }
+func SearchClient() *http.Client { return outbound.SearchProviderHTTPClient(25 * time.Second) }
 
 func Search(ctx context.Context, client *http.Client, key, query string) ([]Source, error) {
-	if strings.TrimSpace(key) == "" {
-		return nil, errors.New("web_search_not_configured: configure Tavily in model settings")
-	}
-	if strings.TrimSpace(query) == "" || len(query) > 1000 {
-		return nil, errors.New("web_query_invalid")
-	}
-	body, _ := json.Marshal(map[string]any{"query": query, "search_depth": "basic", "max_results": 6, "include_answer": false, "include_raw_content": false, "include_images": false})
+	return SearchConfigured(ctx, client, SearchConfig{Provider: "tavily", APIKey: key, MaxResults: 6}, query)
+}
+
+func searchTavily(ctx context.Context, client *http.Client, config SearchConfig, query string) ([]Source, error) {
+	key := config.APIKey
+	body, _ := json.Marshal(map[string]any{"query": query, "search_depth": "basic", "max_results": config.MaxResults, "include_answer": false, "include_raw_content": false, "include_images": false})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.tavily.com/search", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -48,15 +48,21 @@ func Search(ctx context.Context, client *http.Client, key, query string) ([]Sour
 	searchClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := searchClient.Do(req)
 	if err != nil {
-		return nil, errors.New("web_search_network_failed")
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, searchNetworkError("Tavily", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, errors.New("web_search_provider_rejected")
+		return nil, searchProviderError("Tavily", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 2<<20+1))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil || len(data) > 2<<20 {
-		return nil, errors.New("web_search_response_invalid")
+		return nil, searchError(502, "web_search_response_invalid", "Tavily 搜索响应无法读取或超过大小限制")
 	}
 	var result struct {
 		Results []struct {
@@ -67,11 +73,11 @@ func Search(ctx context.Context, client *http.Client, key, query string) ([]Sour
 		} `json:"results"`
 	}
 	if json.Unmarshal(data, &result) != nil {
-		return nil, errors.New("web_search_response_invalid")
+		return nil, searchError(502, "web_search_response_invalid", "Tavily 搜索返回了无效的数据格式")
 	}
 	sources := []Source{}
 	for _, hit := range result.Results {
-		if len(sources) >= 6 {
+		if len(sources) >= config.MaxResults {
 			break
 		}
 		if _, err := outbound.ParsePublicURL(hit.URL); err != nil {

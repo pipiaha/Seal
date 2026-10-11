@@ -11,6 +11,30 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+test('真实宿主：执行中的历史返回过程与工具快照，默认不限制每轮调用次数', async () => {
+  await withHost(async ({ api, getModelCalls }) => {
+    const chat = api('/chat', { canvasId: 'live-progress', turnId: 'live-progress-1', message: 'Read the project', skillSnapshot: { revision: 'test', userScope: '0'.repeat(64), skills: [] } });
+    try {
+      const until = Date.now() + 10000;
+      while (getModelCalls() < 2 && Date.now() < until) await delay(20);
+      expect(getModelCalls()).toBe(2);
+      const history = await api('/history?canvasId=live-progress');
+      expect(history.payload.activeTurn.execution.some(item => item.kind === 'message' && item.text.includes('正在读取'))).toBe(true);
+      expect(history.payload.activeTurn.toolActivity[0].tool).toBe('workspace_info');
+      expect(history.payload.activeTurn.toolActivity[0].status).toBe('completed');
+      expect(history.payload.activeTurn.toolActivity[0].detail.output).toContain('revision');
+      const health = await api('/health');
+      expect(health.payload.requests.perTurnRequests).toBe(0);
+      expect(health.payload.requests.perTurnToolSteps).toBe(0);
+      const other = await api('/history?canvasId=unrelated-project');
+      expect(other.payload.activeTurn ?? null).toBeNull();
+    } finally { await chat; }
+    const finished = await api('/history?canvasId=live-progress');
+    expect(finished.payload.activeTurn).toBeNull();
+    expect(finished.payload.turns[0].execution.some(item => item.kind === 'message' && item.text.includes('正在读取'))).toBe(true);
+  }, {}, { fast: true, liveProgress: true });
+}, 35000);
+
 test('真实宿主：附图通过官方 SDK 成为视觉请求，恢复后仍保留图片', async () => {
   await withHost(async ({ api, modelInputs, directory }) => {
     const image = { id: 'attachment-1', name: 'image.png', mimeType: 'image/png', source: 'upload',
@@ -97,11 +121,48 @@ async function withHost(run, envExtra = {}, fixture = {}) {
   const model = createServer(async (req, res) => {
     modelInputs.push(await jsonBody(req));
     modelCalls += 1;
-    if (modelCalls === 1) {
+    if (modelCalls === 1 && !fixture.fast) {
       await delay(8000);
       if (res.writableEnded) return;
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (fixture.liveProgress && modelCalls === 1) {
+      res.write('data: ' + JSON.stringify({ id: 'live', object: 'chat.completion.chunk', created: 1, model: 'synthetic', choices: [{ index: 0, delta: { role: 'assistant', content: '正在读取当前工程。', tool_calls: [{ index: 0, id: 'live-info', type: 'function', function: { name: 'workspace_info', arguments: '{}' } }] }, finish_reason: null }] }) + '\n\n');
+      res.write('data: ' + JSON.stringify({ id: 'live', object: 'chat.completion.chunk', created: 1, model: 'synthetic', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }) + '\n\n');
+      res.end('data: [DONE]\n\n'); return;
+    }
+    if (fixture.liveProgress && modelCalls === 2) await delay(1200);
+    if (fixture.stall) { await delay(1000); if (res.destroyed) return; }
+    if (envExtra.BEEFTV_AGENT_API === 'anthropic-messages') {
+      const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+      send('message_start', { message: { id: 'msg-fixture', type: 'message', role: 'assistant', model: 'synthetic', content: [], usage: { input_tokens: 100, output_tokens: 0 } } });
+      send('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+      send('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'ok' } });
+      send('content_block_stop', { index: 0 });
+      send('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } });
+      send('message_stop', {}); res.end(); return;
+    }
+    if (envExtra.BEEFTV_AGENT_API === 'openai-responses') {
+      const message = { id: 'msg-fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok', annotations: [] }] };
+      const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+      send('response.created', { response: { id: 'resp-fixture', model: 'synthetic', status: 'in_progress', output: [] } });
+      send('response.output_item.added', { output_index: 0, item: { ...message, status: 'in_progress', content: [] } });
+      send('response.content_part.added', { item_id: message.id, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+      send('response.output_text.delta', { item_id: message.id, output_index: 0, content_index: 0, delta: 'ok' });
+      send('response.output_item.done', { output_index: 0, item: message });
+      send('response.completed', { response: { id: 'resp-fixture', model: 'synthetic', status: 'completed', output: [message], usage: { input_tokens: 100, output_tokens: 1, total_tokens: 101 } } });
+      res.end(); return;
+    }
+    if (fixture.checkpointBeforeTruncation && modelCalls === 1) {
+      res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:'save-plan',type:'function',function:{name:'workflow_checkpoint',arguments:JSON.stringify({title:'Motion sample',goal:'Create a scene',steps:[{id:'design',label:'Design',state:'done'},{id:'scene',label:'Author scene',state:'pending'}]})}}]},finish_reason:null}]})+'\n\n');
+      res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'\n\n');
+      res.end('data: [DONE]\n\n'); return;
+    }
+    if (fixture.alwaysTruncate || fixture.checkpointBeforeTruncation && modelCalls === 2) {
+      res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{role:'assistant',reasoning_content:'Unfinished reasoning'},finish_reason:null}]})+'\n\n');
+      res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{},finish_reason:'length'}],usage:{prompt_tokens:100,completion_tokens:4096,completion_tokens_details:{reasoning_tokens:4096}}})+'\n\n');
+      res.end('data: [DONE]\n\n'); return;
+    }
     if (fixture.frames && modelCalls===1) {
       res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:'read-video',type:'function',function:{name:'media_read',arguments:JSON.stringify({assetId:'video-asset',frames:true,times:[0,1]})}}]},finish_reason:null}]})+'\n\n');
       res.write('data: '+JSON.stringify({id:'s',object:'chat.completion.chunk',created:1,model:'synthetic',choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'\n\n');
@@ -164,6 +225,74 @@ async function withHost(run, envExtra = {}, fixture = {}) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+test('真实宿主：思考截断续接一次，保留原计划和操作记录', async () => {
+  await withHost(async ({ api, modelInputs, getModelCalls }) => {
+    const result=await api('/chat',{canvasId:'length-recovery',turnId:'length1',message:'Create motion graphics',skillSnapshot:{revision:'test',userScope:'0'.repeat(64),skills:[]}});
+    const events=result.text.trim().split('\n').map(line=>JSON.parse(line));
+    const end=events.at(-1);
+    expect(end.error).toBeNull();expect(end.reply).toBe('ok');
+    expect(getModelCalls()).toBe(3);
+    expect(modelInputs[0].max_tokens ?? modelInputs[0].max_completion_tokens).toBe(49152);
+    expect(events.filter(e=>e.type==='lifecycle'&&e.reason==='model_output_truncated')).toHaveLength(1);
+    expect(end.toolCalls.filter(call=>call.tool==='workflow_checkpoint')).toHaveLength(1);
+    expect(end.workflows[0].steps[1].state).toBe('pending');
+    const history=await api('/history?canvasId=length-recovery');
+    expect(history.payload.turns).toHaveLength(1);
+    expect(end.execution.some(item => item.kind === 'tool')).toBe(true);
+    expect(end.execution.find(item => item.id === end.finalMessageId).text).toBe('ok');
+    expect(history.payload.turns[0].execution).toEqual(end.execution);
+    expect(history.payload.turns[0].metrics).toEqual(end.metrics);
+    expect(end.metrics.totalMs).toBeGreaterThanOrEqual(0);
+  },{BEEFTV_AGENT_MODEL:'deepseek-flash'},{fast:true,checkpointBeforeTruncation:true});
+},35000);
+
+test('真实宿主：反复思考截断显示错误，最多续接一次', async () => {
+  await withHost(async ({api,getModelCalls})=>{
+    const result=await api('/chat',{canvasId:'length-bounded',turnId:'length2',message:'Create scene',skillSnapshot:{revision:'test',userScope:'0'.repeat(64),skills:[]}});
+    const end=result.text.trim().split('\n').map(line=>JSON.parse(line)).at(-1);
+    expect(getModelCalls()).toBe(2);
+    expect(end.errorReason).toBe('model_output_truncated');
+    expect(end.error).toContain('输出');
+  },{BEEFTV_AGENT_MODEL:'deepseek-flash',BEEFTV_AGENT_MAX_TOKENS:'4096'},{fast:true,alwaysTruncate:true});
+},35000);
+
+test('真实宿主：截断续接仍受原调用预算限制',async()=>{
+  await withHost(async({api,getModelCalls,modelInputs})=>{
+    const result=await api('/chat',{canvasId:'length-budget',turnId:'length3',message:'Create scene',skillSnapshot:{revision:'test',userScope:'0'.repeat(64),skills:[]}});
+    const end=result.text.trim().split('\n').map(line=>JSON.parse(line)).at(-1);
+    expect(getModelCalls()).toBe(1);
+    expect(modelInputs[0].max_tokens ?? modelInputs[0].max_completion_tokens).toBe(4096);
+    expect(end.errorReason).toBe('turn_request_budget_exhausted');
+  },{BEEFTV_AGENT_MODEL:'deepseek-flash',BEEFTV_AGENT_MAX_TOKENS:'4096',BEEFTV_AGENT_MAX_REQUESTS_PER_TURN:'1'},{fast:true,alwaysTruncate:true});
+},35000);
+
+for (const item of [
+  { model: 'deepseek-flash', effort: 'high', check: input => { expect(input.thinking).toEqual({ type: 'enabled' }); expect(input.reasoning_effort).toBe('high'); expect(input.max_tokens).toBe(49152); } },
+  { model: 'deepseek-flash', effort: 'off', check: input => { expect(input.thinking).toEqual({ type: 'disabled' }); expect(input.reasoning_effort).toBeUndefined(); } },
+  { model: 'deepseek-flash', effort: 'max', check: input => expect(input.reasoning_effort).toBe('max') },
+  { model: 'gpt-5.3-codex', effort: 'medium', check: input => expect(input.reasoning_effort).toBe('medium') },
+  { model: 'gpt-5.3-codex', effort: 'high', api: 'openai-responses', check: input => { expect(input.reasoning.effort).toBe('high'); expect(input.max_output_tokens).toBe(49152); } },
+  { model: 'claude-sonnet-4-5', effort: 'low', api: 'anthropic-messages', check: input => { expect(input.thinking.type).toBe('enabled'); expect(input.thinking.budget_tokens).toBeGreaterThan(0); expect(input.max_tokens).toBe(49152); } },
+  { model: 'claude-opus-4-6', effort: 'high', api: 'anthropic-messages', check: input => { expect(input.thinking.type).toBe('adaptive'); expect(input.output_config.effort).toBe('high'); } },
+]) {
+  test(`真实宿主：48K 思考参数 ${item.api || 'completions'} ${item.model} ${item.effort}`, async () => {
+    await withHost(async ({ api, modelInputs }) => {
+      const result = await api('/chat', { canvasId: 'thinking-config', turnId: 'thinking1', message: 'Hello', skillSnapshot: { revision: 'test', userScope: '0'.repeat(64), skills: [] } });
+      const end = result.text.trim().split('\n').map(line => JSON.parse(line)).at(-1);
+      expect(end.error).toBeNull(); expect(end.reply).toBe('ok');
+      item.check(modelInputs[0]);
+    }, { BEEFTV_AGENT_MODEL: item.model, BEEFTV_AGENT_REASONING_EFFORT: item.effort, ...(item.api ? { BEEFTV_AGENT_API: item.api } : {}) }, { fast: true });
+  }, 35000);
+}
+
+test('真实宿主：模型无进度时结束等待并保留明确原因', async () => {
+  await withHost(async ({ api }) => {
+    const result = await api('/chat', { canvasId: 'idle-model', turnId: 'idle1', message: 'Hello', skillSnapshot: { revision: 'test', userScope: '0'.repeat(64), skills: [] } });
+    const end = result.text.trim().split('\n').map(line => JSON.parse(line)).at(-1);
+    expect(end.errorReason).toBe('model_idle_timeout');
+  }, { BEEFTV_AGENT_IDLE_TIMEOUT_MS: '200' }, { fast: true, stall: true });
+}, 35000);
 
 test('真实宿主：新建会话替换会释放上一条，忙碌时拒绝替换', async () => {
   await withHost(async ({ api, waitFor, getModelCalls }) => {

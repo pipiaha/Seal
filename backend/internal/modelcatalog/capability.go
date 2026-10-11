@@ -127,9 +127,8 @@ func legacyImageSizeValues() []string {
 }
 
 func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *ModelCapabilityConfig {
-	// 文本模型是否支持视觉输入不能从协议或模型名可靠推断，默认关闭，由管理员按真实上游能力开启。
 	streaming := true
-	text := &TextCapabilityConfig{Streaming: &streaming, References: TextReferenceConfig{PromptMaxChars: 32000}}
+	text := &TextCapabilityConfig{Streaming: &streaming, References: TextReferenceConfig{PromptMaxChars: 32000, MaxImages: 8, MaxImageBytes: 4 << 20}}
 	video := &VideoCapabilityConfig{
 		References:        VideoReferenceConfig{PromptMaxChars: DefaultVideoPromptMaxChars, MinImages: 0, MaxImages: 9, MaxImageBytes: 30 * 1024 * 1024, MaxVideos: 0, MaxVideoBytes: 0, MaxVideoDuration: 0, MaxAudios: 0, MaxAudioBytes: 0, MaxAudioDuration: 0},
 		Duration:          VideoDurationConfig{Selection: "range", Min: 1, Max: 15, Step: 1, Default: 6},
@@ -484,6 +483,9 @@ func addInputConstraint(inputs map[string]InputConstraint, name string, min int,
 }
 
 func validateTextCapabilityConfig(value *TextCapabilityConfig) error {
+	if err := validateTextExecutionSettings(value); err != nil {
+		return err
+	}
 	if value.References.PromptMaxChars < 1 || value.References.PromptMaxChars > 1000000 {
 		return kernel.BadAuthRequest("提示词最大字符数必须在 1-1000000 之间")
 	}
@@ -494,6 +496,46 @@ func validateTextCapabilityConfig(value *TextCapabilityConfig) error {
 	}
 	if value.References.MaxImageBytes < 0 || value.References.MaxVideoBytes < 0 {
 		return kernel.BadAuthRequest("引用素材大小限制不能小于 0")
+	}
+	return nil
+}
+
+func validateTextExecutionSettings(value *TextCapabilityConfig) error {
+	if value.MaxOutputTokens < 0 || value.MaxOutputTokens > 1048576 || value.OutputTokenLimit < 0 || value.OutputTokenLimit > 1048576 {
+		return kernel.BadAuthRequest("输出 Token 必须在 1-1048576 之间，留空使用默认值")
+	}
+	if value.ContextWindow != 0 && (value.ContextWindow < 1024 || value.ContextWindow > 4000000) {
+		return kernel.BadAuthRequest("上下文窗口必须在 1024-4000000 之间")
+	}
+	switch value.ReasoningFormat {
+	case "", "auto", "none", "openai", "deepseek", "openrouter", "zai", "qwen", "anthropic-adaptive", "anthropic-budget":
+	default:
+		return kernel.BadAuthRequest("不支持的思考参数格式")
+	}
+	validLevel := func(level string) bool {
+		switch level {
+		case "off", "low", "medium", "high", "xhigh", "max":
+			return true
+		}
+		return false
+	}
+	if value.ReasoningEffort != "" && !validLevel(value.ReasoningEffort) {
+		return kernel.BadAuthRequest("不支持的思考强度")
+	}
+	if len(value.ReasoningLevels) > 6 {
+		return kernel.BadAuthRequest("思考档位最多六个")
+	}
+	found := value.ReasoningEffort == ""
+	for _, level := range value.ReasoningLevels {
+		if !validLevel(level) {
+			return kernel.BadAuthRequest("不支持的思考档位")
+		}
+		if level == value.ReasoningEffort {
+			found = true
+		}
+	}
+	if len(value.ReasoningLevels) > 0 && !found {
+		return kernel.BadAuthRequest("默认思考强度必须属于支持的档位")
 	}
 	return nil
 }

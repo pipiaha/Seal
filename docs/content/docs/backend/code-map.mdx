@@ -8,6 +8,8 @@ Seal 是单用户、本地优先的桌面应用。项目、画布、素材和任
 
 ## 运行链路
 
+联网搜索设置由 `web/src/pages/settings/search-settings-pane.tsx` 提供独立分类，`handler/assistant_workspace.go` 接入受信任界面的配置与测试入口，以及当前工程助手工具。`app/assistant_web.go` 按用户保存脱敏配置、分别加密两家凭证，并在执行时读取复用渠道的当前密钥；`agentweb/web.go` 调用 Tavily，`agentweb/search.go` 调用 DeepSeek 原生 Messages 搜索并解析结构化来源与引用。两家共用来源合同，不替换 Pi Runtime，不自动切换服务。
+
 模型服务设置由 `web/src/pages/settings/model-service-editor.tsx` 管理添加和编辑草稿；`model-service-presets.ts` 依据已启用的协议插件填写初始配置。`model-connection-test.ts` 通过正常后端生成任务验证结果。`internal/workspace/provider_config.go` 持有配置版本、保存冲突和文件读写，`internal/localcrypto` 统一工作区凭据加解密格式。
 
 ```text

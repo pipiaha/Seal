@@ -46,9 +46,11 @@ suite, not its composition and motion-design knowledge.
    `hyperframes_export`; inspect `hyperframes_exports` until complete. Undo uses
    `edit_history` and `edit_undo_entry`.
 
-Do not run shell commands, npm/npx, installers, automatic updates, hosted/cloud
-rendering, publish, telemetry, external URL capture, credential tools, Framey or
-another Studio server. External media and model generation go through BeefTV's
-existing asset/generation tools. Local project assets can be bound into candidates.
-Original helper scripts are reference material, not executable permissions.
-Tool availability does not grant access outside the frozen current edit project.
+Use workspace_skill to copy helpers and workspace_run to execute JS/Python with
+the current OS user's full local access; no extra script approval is required.
+Use workspace_install for project dependencies and workspace_info to check tools.
+The project directory is the default cwd, not an OS sandbox. Do not read credentials.
+Keep the pinned CLI and native preview/export path; do not auto-upgrade, publish
+to a cloud service, enable telemetry, or start another Studio. Paid media generation
+continues through Seal's existing asset/generation approval tools.
+Native timeline tools remain bound to the frozen current edit project.

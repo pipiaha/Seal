@@ -11,6 +11,13 @@ type ModelCapabilityConfig struct {
 }
 
 type TextCapabilityConfig struct {
+	MaxOutputTokens  int      `json:"maxOutputTokens,omitempty"`
+	OutputTokenLimit int      `json:"outputTokenLimit,omitempty"`
+	ContextWindow    int      `json:"contextWindow,omitempty"`
+	ReasoningFormat  string   `json:"reasoningFormat,omitempty"`
+	ReasoningEffort  string   `json:"reasoningEffort,omitempty"`
+	ReasoningLevels  []string `json:"reasoningLevels,omitempty"`
+	Thinking         *bool    `json:"thinking,omitempty"`
 	// Streaming controls whether this model accepts upstream SSE text responses.
 	// A nil value is treated as true for backwards compatibility with older configs.
 	Streaming  *bool               `json:"streaming,omitempty"`

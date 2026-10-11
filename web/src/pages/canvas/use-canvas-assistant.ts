@@ -28,6 +28,7 @@ import {
     type AssistantSkillUse,
     type AssistantUndoFailure,
     type AssistantToolActivity,
+    type AssistantExecutionEntry,
     type AssistantInstruction,
     type AssistantImage,
     type AssistantMedia,
@@ -36,6 +37,7 @@ import { assistantChangedNodeIds, assistantLifecycleText } from "./canvas-assist
 import { waitForAssistant } from "./assistant-readiness";
 import { findRecoveredAssistantTurn, type PendingAssistantRecovery } from "./canvas-assistant-recovery";
 import { settleToolActivity, updateToolActivity } from "./assistant-tool-activity";
+import { appendExecutionTool, updateExecutionMessage } from './assistant-execution';
 
 export const ASSISTANT_MIN_WIDTH = 320;
 export const ASSISTANT_MAX_WIDTH = 560;
@@ -96,6 +98,7 @@ type CanvasRun = {
     pendingRequestedSkill: AssistantSkillUse | null;
     streamed: string;
     toolActivity: AssistantToolActivity[];
+    execution: AssistantExecutionEntry[];
     streaming: boolean;
     lifecycleNotice: string | null;
     controller: AbortController | null;
@@ -125,6 +128,7 @@ const createRun = (): CanvasRun => ({
     pendingRequestedSkill: null,
     streamed: "",
     toolActivity: [],
+    execution: [],
     streaming: false,
     lifecycleNotice: null,
     controller: null,
@@ -256,6 +260,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                 run.activeTurnId = null;
                 run.recovery = null;
                 run.pendingUserText = null;
+                run.streamed = '';
+                run.execution = [];
+                run.toolActivity = [];
+                run.lifecycleNotice = null;
                 run.instructions = recovered.instructions || [];
                 onCanvasChangedRef.current?.(targetCanvas, assistantChangedNodeIds(recovered.change));
             }
@@ -266,6 +274,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                 run.pendingUserText = history.activeTurn.userText;
                 run.pendingSelectedNodeIds = history.activeTurn.selectedNodeIds;
                 run.instructions = history.activeTurn.instructions || [];
+                run.execution = history.activeTurn.execution || [];
+                run.toolActivity = history.activeTurn.toolActivity || [];
+                run.streamed = run.execution.filter(entry => entry.kind === 'message').map(entry => entry.text).join('\n\n');
+                run.lifecycleNotice = assistantLifecycleText(history.activeTurn.lifecycle);
                 run.recovery = { sessionId: history.sessionId, turnId: history.activeTurn.turnId,
                     knownTurnIds: history.turns.map(turn => turn.turnId), text: history.activeTurn.userText,
                     selectedNodeIds: history.activeTurn.selectedNodeIds };
@@ -312,7 +324,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         void loadHistory(canvasId);
     }, [canvasId, loadHistory, open, runFor, status?.available]);
 
-    const send = useCallback(async (text: string, selectedNodeIds: string[], references: AgentChatReference[] = [], selectedSkill?: AssistantSkillUse, images: AssistantImage[] = [], media: AssistantMedia[] = [], options:{continuationProposalId?:string}={}) => {
+    const send = useCallback(async (text: string, selectedNodeIds: string[], references: AgentChatReference[] = [], selectedSkill?: AssistantSkillUse, images: AssistantImage[] = [], media: AssistantMedia[] = [], options:{continuationProposalId?:string; onAdmitted?: (turnId: string) => void}={}) => {
         const message = text.trim();
         if (!message) return;
         // 发送时冻结归属：此后即使用户切到别的画布，结果也只写回这条记录。
@@ -332,6 +344,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         run.pendingRequestedSkill = skillSelection ?? null;
         run.streamed = "";
         run.toolActivity = [];
+        run.execution = [];
         run.streaming = true;
         run.lifecycleNotice = null;
         run.controller = controller;
@@ -365,19 +378,30 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     run.activeTurnId = start.turnId;
                     run.sessionId = start.sessionId;
                     if (run.recovery) { run.recovery.sessionId = start.sessionId; run.recovery.turnId = start.turnId; }
+                    options.onAdmitted?.(start.turnId);
                     rerenderIfActive(targetCanvas);
                 },
                 onTool: (event) => {
                     const current = runFor(targetCanvas);
+                    current.lifecycleNotice = null;
+                    current.execution = appendExecutionTool(current.execution, event.toolCallId);
                     const next = updateToolActivity(current.toolActivity, event);
                     if (next !== current.toolActivity) {
                         current.toolActivity = next;
                         scheduleStreamRender(targetCanvas);
                     }
                 },
-                onDelta: (delta) => {
+                onDelta: (delta, messageId) => {
                     const current = runFor(targetCanvas);
+                    current.lifecycleNotice = null;
                     current.streamed += delta;
+                    if (messageId) current.execution = updateExecutionMessage(current.execution, messageId, delta, true);
+                    scheduleStreamRender(targetCanvas);
+                },
+                onMessage: ({ messageId, text }) => {
+                    const current = runFor(targetCanvas);
+                    current.lifecycleNotice = null;
+                    current.execution = updateExecutionMessage(current.execution, messageId, text);
                     scheduleStreamRender(targetCanvas);
                 },
                 onLifecycle: (event) => {
@@ -395,7 +419,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                         turnId: end.turnId || `${targetCanvas}:${Date.now()}`,
                         userText: message,
                         selectedNodeIds: selectedSnapshot,
-                        reply: end.reply || current.streamed,
+                        reply: end.reply,
+                        execution: end.execution ?? current.execution,
+                        finalMessageId: end.finalMessageId,
+                        metrics: end.metrics,
                         toolCalls: end.toolCalls || [],
                         toolActivity: settleToolActivity(end.toolActivity ?? current.toolActivity),
                         change: end.change ?? null,
@@ -420,6 +447,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     current.pendingRequestedSkill = null;
                     current.streamed = "";
                     current.toolActivity = [];
+                    current.execution = [];
                     current.lifecycleNotice = null;
                     onCanvasChangedRef.current?.(targetCanvas, assistantChangedNodeIds(turn.change));
                     const published = (end.toolCalls || []).filter(call => call.tool === "workspace_publish" && !call.isError)
@@ -500,7 +528,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         }
     }, [loadHistory, rerenderIfActive, runFor]);
 
-    const supplement = useCallback(async (text: string) => {
+    const supplement = useCallback(async (text: string, instructionId?: string) => {
         const targetCanvas = activeCanvasRef.current;
         const run = runFor(targetCanvas);
         if (!run.activeTurnId || !run.sessionId || run.instructionBusy) return false;
@@ -509,7 +537,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         rerenderIfActive(targetCanvas);
         try {
             const pending = run.pendingInstruction?.turnId === run.activeTurnId && run.pendingInstruction.message === text
-                ? run.pendingInstruction : { instructionId: crypto.randomUUID(), turnId: run.activeTurnId, message: text };
+                ? run.pendingInstruction : { instructionId: instructionId || crypto.randomUUID(), turnId: run.activeTurnId, message: text };
             run.pendingInstruction = pending;
             const instruction = await steerAgentChat(targetCanvas, run.sessionId, pending.turnId, text, pending.instructionId);
             const observed = run.instructions.find(item => item.instructionId === instruction.instructionId);
@@ -518,7 +546,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
             run.pendingInstruction = null;
             return true;
         } catch {
-            run.instructionError = '补充要求未能确认送达，请重新读取对话后核对；这条文字仍保留在输入框。';
+            run.instructionError = '补充要求未能确认送达，请重新读取对话后核对；消息仍然保留。';
             return false;
         } finally {
             run.instructionBusy = false;
@@ -554,6 +582,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
             run.recovery = null;
             run.turns = [];
             run.toolActivity = [];
+            run.execution = [];
             run.error = null;
             run.pendingUserText = null;
             run.lastSent = null;
@@ -588,6 +617,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                 run.lastSent = null;
                 run.pendingUserText = null;
                 run.toolActivity = [];
+                run.execution = [];
             }
         } catch {
             run.error = "没能切换对话，当前对话仍然保留。请重试。";
@@ -647,6 +677,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         modelBusy: statusBusy || [...runsRef.current.values()].some((item) => item.streaming || item.waitingForTurn || item.sessionBusy),
         sessions: run.sessions,
         sessionId: run.sessionId,
+        activeTurnId: run.activeTurnId,
         turns: run.turns,
         historyLoaded: run.historyLoaded,
         historyError: run.historyError,
@@ -658,6 +689,7 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
         pendingRequestedSkill: run.pendingRequestedSkill,
         streamed: run.streamed,
         toolActivity: run.toolActivity,
+        execution: run.execution,
         streaming: run.streaming || run.waitingForTurn,
         canSupplement: Boolean(run.activeTurnId) && !run.instructionBusy,
         instructions: run.instructions,

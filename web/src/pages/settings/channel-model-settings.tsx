@@ -177,10 +177,11 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                         key: "capabilities",
                         label: "能力与参数",
                         children: <div inert={Boolean(testingModel)}>
-                            {activeCapability === "image" || activeCapability === "video" ? (
+                            {activeCapability === "text" || activeCapability === "image" || activeCapability === "video" ? (
                                 <ModelCapabilityEditor
                                     capability={activeCapability}
                                     model={activeModel}
+                                    baseUrl={channel.baseUrl}
                                     value={activeModelProfile?.capabilityConfig || defaultModelCapabilityConfig(activeProtocol, activeModel)}
                                     protocol={activeProtocol}
                                     onChange={(capabilityConfig) => updateProfile(activeModel, { capabilityConfig })}

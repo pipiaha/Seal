@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -51,12 +52,11 @@ type Workspace struct {
 	mu   sync.Mutex
 }
 type Manager struct {
-	base      string
-	mu        sync.Mutex
-	roots     map[string]*Workspace
-	cancel    context.CancelFunc
-	ctx       context.Context
-	runtimeMu sync.Mutex
+	base   string
+	mu     sync.Mutex
+	roots  map[string]*Workspace
+	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 func New(base string) *Manager {
@@ -414,9 +414,6 @@ func (m *Manager) Run(ctx context.Context, w *Workspace, r RunRequest, node, pyt
 	if m.ctx.Err() != nil {
 		return nil, errors.New("workspace_runtime_closed")
 	}
-	if !sandboxAvailable() {
-		return nil, errors.New("sandbox_unavailable")
-	}
 	if !operation.MatchString(r.OperationID) || len(r.Args) > 64 {
 		return nil, errors.New("run_request_invalid")
 	}
@@ -445,12 +442,16 @@ func (m *Manager) Run(ctx context.Context, w *Workspace, r RunRequest, node, pyt
 	if exe == "" {
 		return nil, errors.New("runtime_not_installed")
 	}
-	exe, err = m.stageRuntime(exe, r.Runtime)
+	exe, err = runtimeExecutable(exe)
 	if err != nil {
 		return nil, err
 	}
 	if r.Runtime == "python" {
-		venv, e := w.path(".venv/Scripts/python.exe")
+		venvPath := ".venv/bin/python"
+		if runtime.GOOS == "windows" {
+			venvPath = ".venv/Scripts/python.exe"
+		}
+		venv, e := w.path(venvPath)
 		if e != nil {
 			return nil, e
 		}
@@ -504,15 +505,9 @@ func (m *Manager) Run(ctx context.Context, w *Workspace, r RunRequest, node, pyt
 			return nil, err
 		}
 	}
-	env := []string{"SystemRoot=" + os.Getenv("SystemRoot"), "PATH=" + filepath.Dir(exe) + ";" + filepath.Join(os.Getenv("SystemRoot"), "System32"), "TEMP=" + filepath.Join(w.Root, "tmp"), "TMP=" + filepath.Join(w.Root, "tmp"), "HOME=" + filepath.Join(w.Root, "home"), "PYTHONUSERBASE=" + filepath.Join(w.Root, "home", "python"), "PIP_CACHE_DIR=" + filepath.Join(w.Root, "tmp", "pip"), "npm_config_cache=" + filepath.Join(w.Root, "tmp", "npm"), "npm_config_prefix=" + filepath.Join(w.Root, "deps"), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1"}
+	env := scriptEnvironment(w.Root, exe)
 	out := &boundedOutput{}
-	// Node's default realpath walk reads metadata of every parent up to the
-	// drive root. The sandbox grants project files, not ancestor directories.
-	env = append(env, "NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main")
-	// Python otherwise discovers the host's Windows Internet Settings proxy,
-	// even without inherited HTTP_PROXY. Loopback proxies are outside this scope.
-	env = append(env, "NO_PROXY=*")
-	exit, runErr := runSandbox(runCtx, w.Root, exe, append([]string{script}, r.Args...), env, out)
+	exit, runErr := runLocalProcess(runCtx, w.Root, exe, append([]string{script}, r.Args...), env, out)
 	result := RunResult{State: "completed", ExitCode: exit, Output: strings.ToValidUTF8(string(out.body), "�"), Truncated: out.truncated, OperationID: r.OperationID}
 	if runErr != nil {
 		result.State = "failed"
@@ -531,116 +526,58 @@ func (m *Manager) Run(ctx context.Context, w *Workspace, r RunRequest, node, pyt
 	return &result, nil
 }
 
-// Stage only interpreter files, not the Agent host's modules or its environment.
-func (m *Manager) stageRuntime(source, kind string) (string, error) {
-	m.runtimeMu.Lock()
-	defer m.runtimeMu.Unlock()
+func runtimeExecutable(source string) (string, error) {
 	info, err := os.Stat(source)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", errors.New("runtime_not_installed")
 	}
-	hash, err := fileHash(source)
-	if err != nil {
-		return "", err
+	return filepath.Abs(source)
+}
+
+// Keep normal executable lookup and network settings without forwarding the
+// application's arbitrary environment (provider keys, tokens or Node hooks).
+func scriptEnvironment(root, executable string) []string {
+	allowed := map[string]bool{}
+	for _, key := range []string{"PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "LANG", "LC_ALL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "PRODUCER_FFMPEG_PATH", "PRODUCER_FFPROBE_PATH", "HYPERFRAMES_BROWSER_PATH"} {
+		allowed[key] = true
 	}
-	dest := filepath.Join(m.base, "runtimes", kind+"-"+hash[:16])
-	exe := filepath.Join(dest, filepath.Base(source))
-	if _, e := os.Stat(filepath.Join(dest, ".ready")); e == nil {
-		return exe, nil
-	}
-	if err = os.MkdirAll(dest, 0700); err != nil {
-		return "", err
-	}
-	copyFile := func(from, to string) error {
-		data, e := os.ReadFile(from)
-		if e != nil {
-			return e
-		}
-		if e = os.MkdirAll(filepath.Dir(to), 0700); e != nil {
-			return e
-		}
-		return os.WriteFile(to, data, 0700)
-	}
-	if err = copyFile(source, exe); err != nil {
-		return "", err
-	}
-	if kind == "python" {
-		parent := filepath.Dir(source)
-		entries, e := os.ReadDir(parent)
-		if e != nil {
-			return "", e
-		}
-		for _, entry := range entries {
-			if strings.HasSuffix(strings.ToLower(entry.Name()), ".dll") || strings.HasSuffix(entry.Name(), ".zip") || strings.HasSuffix(entry.Name(), "._pth") {
-				if e = copyFile(filepath.Join(parent, entry.Name()), filepath.Join(dest, entry.Name())); e != nil {
-					return "", e
-				}
-			}
-		}
-		for _, dir := range []string{"Lib", "DLLs"} {
-			from := filepath.Join(parent, dir)
-			if _, e = os.Stat(from); os.IsNotExist(e) {
-				continue
-			}
-			e = filepath.WalkDir(from, func(p string, d fs.DirEntry, e error) error {
-				if e != nil {
-					return e
-				}
-				if d.Name() == "site-packages" || d.Name() == "__pycache__" {
-					return fs.SkipDir
-				}
-				i, e := d.Info()
-				if e != nil {
-					return e
-				}
-				if isLink(i) {
-					return errors.New("runtime_link_denied")
-				}
-				if d.IsDir() {
-					return nil
-				}
-				rel, _ := filepath.Rel(parent, p)
-				return copyFile(p, filepath.Join(dest, rel))
-			})
-			if e != nil {
-				return "", e
-			}
+	values := map[string]string{}
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && allowed[strings.ToUpper(key)] {
+			values[key] = value
 		}
 	}
-	if kind == "node" {
-		from := filepath.Join(filepath.Dir(source), "node_modules", "npm")
-		if _, e := os.Stat(from); e == nil {
-			err = filepath.WalkDir(from, func(p string, d fs.DirEntry, e error) error {
-				if e != nil {
-					return e
-				}
-				i, e := d.Info()
-				if e != nil {
-					return e
-				}
-				if isLink(i) {
-					return errors.New("runtime_link_denied")
-				}
-				if d.IsDir() {
-					return nil
-				}
-				rel, _ := filepath.Rel(from, p)
-				return copyFile(p, filepath.Join(dest, "node_modules", "npm", rel))
-			})
-			if err != nil {
-				return "", err
-			}
+	for key := range values {
+		if strings.EqualFold(key, "PATH") {
+			delete(values, key)
 		}
 	}
-	if err = os.WriteFile(filepath.Join(dest, ".ready"), []byte("1"), 0600); err != nil {
-		return "", err
+	values["PATH"] = filepath.Dir(executable) + string(os.PathListSeparator) + os.Getenv("PATH")
+	for key, value := range map[string]string{
+		"TEMP": filepath.Join(root, "tmp"), "TMP": filepath.Join(root, "tmp"), "TMPDIR": filepath.Join(root, "tmp"),
+		"HOME": filepath.Join(root, "home"), "APPDATA": filepath.Join(root, "home"),
+		"PYTHONUSERBASE": filepath.Join(root, "home", "python"), "PIP_CACHE_DIR": filepath.Join(root, "tmp", "pip"),
+		"npm_config_cache": filepath.Join(root, "tmp", "npm"), "npm_config_prefix": filepath.Join(root, "deps"),
+		"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1",
+	} {
+		values[key] = value
 	}
-	return exe, nil
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		env = append(env, key+"="+values[key])
+	}
+	return env
 }
 
 func Status(node, python string) map[string]any {
 	available := func(file string) bool { i, e := os.Stat(file); return e == nil && i.Mode().IsRegular() }
-	return map[string]any{"sandbox": sandboxAvailable(), "node": available(node), "python": available(python), "scope": "current-project-workspace", "network": "public-internet", "maxSeconds": 120}
+	return map[string]any{"sandbox": false, "executionMode": "full-access", "node": available(node), "python": available(python), "scope": "current-os-user", "network": "system-network", "maxSeconds": 120}
 }
 func (w *Workspace) Info() map[string]any {
 	return map[string]any{"root": w.Root, "folders": []string{"skills", "materials", "output", "tmp"}, "nativeEditing": "Use edit_* and hyperframes_* tools for live timeline changes and undo."}

@@ -15,6 +15,7 @@ import { createTurnObserver } from './lifecycle-events.mjs';
 import { createContextTools } from './turn-context.mjs';
 import { observeTurnInstruction } from './turn-instructions.mjs';
 import { limitVisualContext } from './visual-input.mjs';
+import { canRecoverEmptyOutput, OUTPUT_RECOVERY_PROMPT } from './output-policy.mjs';
 
 export const TURN_ENTRY_TYPE = 'beeftv.canvas.turn';
 
@@ -35,7 +36,7 @@ function storeClosedError() {
   return error;
 }
 
-export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId, getModelRuntime, getModel, resourceLoader: suppliedResourceLoader, resourceLoaderFactory, turnBudgetContext }) {
+export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId, getModelRuntime, getModel, thinkingLevel = 'off', resourceLoader: suppliedResourceLoader, resourceLoaderFactory, turnBudgetContext }) {
   const sessions = new Map();
   const canvasLocks = new Map();
   let closed = false;
@@ -184,13 +185,15 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
       agentDir,
       modelRuntime: getModelRuntime() || undefined,
       model: getModel() || undefined,
-      thinkingLevel: 'off',
+      thinkingLevel,
       noTools: 'builtin',
       customTools: tools,
       resourceLoader,
       settingsManager: createHostSettingsManager(),
       sessionManager: manager,
     });
+    // Restored transcripts may contain an older effort setting.
+    session.setThinkingLevel(thinkingLevel);
     const prepareRequest = session.agent.prepareRequest;
     session.agent.prepareRequest = async (request, signal) => {
       const prepared = await prepareRequest?.(request, signal);
@@ -306,18 +309,35 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
   }
 
   function releaseChatSession(entry) {
-    if (entry) entry.busy = false;
+    if (entry) { entry.busy = false; entry.progress = null; }
   }
 
-  async function runOwnedPrompt(entry, message, { onEvent, runWithBudget, timeoutMs, images = [] }) {
+  async function runOwnedPrompt(entry, message, { onEvent, runWithBudget, timeoutMs, idleTimeoutMs = 0, images = [] }) {
     const observer = createTurnObserver();
+    entry.progress = observer;
+    let timedOut = false;
+    let idleTimedOut = false;
+    let idleTimer;
+    const activeTools = new Set();
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      if (idleTimeoutMs > 0 && !activeTools.size && !entry.generation.aborted) idleTimer = setTimeout(() => {
+        timedOut = true;
+        idleTimedOut = true;
+        entry.generation.aborted = true;
+        entry.session.abort().catch(() => {});
+      }, idleTimeoutMs);
+    };
     const unsubscribe = entry.session.subscribe((event) => {
+      if (event.type === 'tool_execution_start') { activeTools.add(event.toolCallId); clearTimeout(idleTimer); }
+      if (event.type === 'tool_execution_end') { activeTools.delete(event.toolCallId); resetIdleTimer(); }
+      if (event.type === 'message_update' || event.type === 'message_start' || event.type === 'compaction_start') resetIdleTimer();
+      if (event.type === 'agent_settled') clearTimeout(idleTimer);
       const instruction = observeTurnInstruction(entry, event);
       if (instruction) onEvent({ type: 'instruction', instruction });
       const payload = observer.handle(event);
       if (payload) onEvent(payload);
     });
-    let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       entry.generation.aborted = true;
@@ -325,22 +345,38 @@ export function createSessionStore({ sessionRoot, workspaceRoot, agentDir, runId
     }, timeoutMs);
     let error = null;
     try {
+      resetIdleTimer();
       await runWithBudget(async () => {
         await entry.session.prompt(message, { expandPromptTemplates: false, source: 'rpc', images });
       });
       if (!observer.settled) {
         try { await entry.session.waitForIdle(); } catch { /* 仍按未 settle 处理 */ }
       }
+      // Use the official session once more, sharing this turn's observer,
+      // operation receipts, budget and original deadline. Never replay prompt
+      // work after cancellation or while an async/approval task is pending.
+      if (observer.settled && !timedOut && canRecoverEmptyOutput(entry, observer.lastAssistantMessage)) {
+        onEvent({ type: 'lifecycle', phase: 'retry', reason: 'model_output_truncated', attempt: 1, maxAttempts: 1 });
+        if (!entry.generation.aborted) {
+          observer.beginRun();
+          resetIdleTimer();
+          await runWithBudget(() => entry.session.prompt(OUTPUT_RECOVERY_PROMPT, { expandPromptTemplates: false, source: 'rpc' }));
+          if (!observer.settled) {
+            try { await entry.session.waitForIdle(); } catch { /* 统一检查最终 settled */ }
+          }
+        }
+      }
     } catch (promptError) {
       error = `${promptError?.name || 'Error'}: ${promptError?.message || promptError}`;
     } finally {
       clearTimeout(timer);
+      clearTimeout(idleTimer);
       unsubscribe();
     }
     if (!observer.settled && !error) {
       error = 'Error: agent run did not settle';
     }
-    return { observer, error, timedOut };
+    return { observer, error, timedOut, idleTimedOut };
   }
 
   async function disposeAll() {

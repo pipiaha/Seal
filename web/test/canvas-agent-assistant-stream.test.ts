@@ -90,6 +90,21 @@ afterEach(() => {
 const TURN_END = JSON.stringify({ type: "turn_end", reply: "完成", toolCalls: [], error: null, cancelled: false });
 
 describe("创作助手回合流边界", () => {
+    test('执行正文带消息边界，最终摘要、过程和用时在结算及历史保留', async () => {
+        const execution = [{ kind: 'message', id: 'm1', text: '先检查工程' }, { kind: 'tool', toolCallId: 'read1' }, { kind: 'message', id: 'm2', text: '完成' }];
+        const metrics = { firstTokenMs: 120, totalMs: 38000 };
+        const end = { type: 'turn_end', reply: '完成', execution, finalMessageId: 'm2', metrics, toolCalls: [], error: null, cancelled: false };
+        chatResponse = () => chatResponseOf([
+            JSON.stringify({ type: 'text_delta', messageId: 'm1', delta: '先检查工程' }) + '\n',
+            JSON.stringify({ type: 'assistant_message', messageId: 'm1', text: '先检查工程', thinking: 'not-visible' }) + '\n',
+            JSON.stringify(end),
+        ]);
+        const seen: unknown[] = [];
+        await streamAgentChat('c1', '剪辑', { onDelta: (delta, id) => seen.push({ delta, id }), onMessage: message => seen.push(message), onTurnEnd: result => seen.push(result) });
+        expect(seen).toEqual([{ delta: '先检查工程', id: 'm1' }, { messageId: 'm1', text: '先检查工程' }, end]);
+        historyData = { sessionId: 's1', turns: [end] };
+        expect((await getAssistantHistory('c1')).turns[0].metrics).toEqual(metrics);
+    });
     test('history projection preserves active identity and queued supplements for page reopen', async () => {
         const activeTurn = { turnId: 't1', sessionId: 's1', userText: 'edit', selectedNodeIds: ['a'],
             instructions: [{ instructionId: 'i1', message: 'white subtitles', state: 'queued', turnId: 't1' }] };

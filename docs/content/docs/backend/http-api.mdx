@@ -57,6 +57,14 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 这些任务在本机完成，提交时不用挑选模型。请求可以带 `clientOperationId`：同一确认重复提交会回到原来的任务；同一确认换成不同内容会被拒绝，不会再新建一条。
 
+## 助手输出预算与思考
+
+`GET /assistant/status` 的 `model` 附带 `maxOutputTokens`、`contextWindow`、`reasoningFormat` 与 `reasoningEffort`（不含密钥）。文字模型执行参数通过既有工作区模型配置保存；`model_parameters_invalid` 表示输出或思考参数无效，不能静默切换模型。
+
+助手默认单次预算为49152 Token，包含思考与正文；不是任务总预算。SDK负责协议映射：Chat Completions 的 `max_tokens` / `max_completion_tokens`，Responses 的 `max_output_tokens`；DeepSeek思考开关使用 `thinking.type`，启用时发送 `reasoning_effort`，关闭时不附带力度。Claude按配置使用预算或自适应格式。已保存的模型输出上限取较小值，SDK再按剩余上下文限制请求。上游拒绝配置时保留错误，不自动付费探测上限或改用另一渠道。
+
+流式生命周期增加 `thinking` / `thinking_end`；不向页面传内部思考正文。`retry` 可带 `reason=model_output_truncated`，表示一次有限续接：仅在纯思考截断、未取消且无待审批或等待任务时执行，共用原轮次预算、操作回执和期限。再次截断返回 `model_output_truncated`；部分正文或工具参数不自动拼接。`model_response_aborted` 表示上游中断。默认整轮期限15分钟，无模型内容或进度超过3分钟返回 `model_idle_timeout`；工具执行期间暂停模型空闲计时，工具保留自己的超时和停止处理。
+
 ## 本地 Skill Hub
 
 所有请求使用当前工作区身份。内置 `beeftv-editing`、`hypit`、`hyperframes`、`video-use`、`skill-creator` 允许查看和启停；用户包不能覆盖内置标识。
@@ -77,7 +85,7 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 ### 助手制作扩充
 
-`POST /assistant/chat` 支持 `images: [{id,name,mimeType,data,source?}]`；`data` 是 PNG/JPEG 的 Base64，不能用文件路径或素材编号替代图片内容。图片是用户提供的观察，不增加文件或工具授权。后端在接纳回合前校验实际图片格式、像素、数量和大小；失败返回 `image_input_invalid`。产品上限为 8 张、合计 12 MiB，单图及数量还受所选模型 `capabilityConfig.text.references.maxImages/maxImageBytes` 限制。配置默认不声明视觉能力，需明确开启；状态接口的 `model.maxImages/maxImageBytes` 返回当前有效限制，配置变化会更新宿主。
+`POST /assistant/chat` 支持 `images: [{id,name,mimeType,data,source?}]`；`data` 是 PNG/JPEG 的 Base64，不能用文件路径或素材编号替代图片内容。图片是用户提供的观察，不增加文件或工具授权。后端在接纳回合前校验实际图片格式、像素、数量和大小；失败返回 `image_input_invalid`。产品上限为 8 张、合计 12 MiB，单图及数量还受所选模型 `capabilityConfig.text.references.maxImages/maxImageBytes` 限制。新配置及未填写图片参数的已有模型默认允许 8 张、每张 4 MiB；显式将数量或大小设为 0 时关闭图片输入。状态接口的 `model.maxImages/maxImageBytes` 返回当前有效限制，配置变化会更新宿主。
 
 运行端通过官方 pi `prompt(...,{images})` 发送附件，通过官方供应商适配器转换 OpenAI Chat、Responses 和 Anthropic 图片内容。官方会话保存真实图片，回合历史只返回附件名称、来源等元数据。请求投影保留最新图片并限制整个请求的图片总数，不修改保存的会话；旧附件可通过当前会话范围内的 `conversation_image_read` 重新读取。附件不能在运行中补充指令时追加，需在下一轮发送。
 
@@ -109,7 +117,11 @@ Agent 的 `edit_view` 复用这个读取入口：支持指定时间、当前选�
 
 ### 工程文件、脚本与联网工具
 
-`GET /assistant/web-settings` 返回脱敏 `settings`（enabled、configured）和 `runtime`（sandbox、node、python、scope、maxSeconds）。`PUT` 仅接受可信桌面界面，输入 enabled、可选 apiKey、clearKey；留空保留原密钥，clearKey 清除。宿主不能修改该配置。
+`GET /assistant/web-settings` 返回脱敏 `settings`（enabled、provider=tavily/deepseek、credentialSource=manual/channel、channelId、baseUrl、model、maxResults、configured、可选 configurationError）和 `runtime`（sandbox=false、executionMode=full-access、node、python、scope=current-os-user、network=system-network、maxSeconds）。`PUT` 仅接受可信桌面界面，输入以上可写配置与可选 apiKey、clearKey；两家独立密钥分别加密保存，留空保留当前服务原密钥，clearKey 仅清除当前服务独立密钥。DeepSeek 渠道复用每次读取当前渠道密钥，停用、删除或缺少密钥明确失败；搜索地址独立于聊天地址，必须是公开 HTTPS 基础地址。宿主不能修改该配置。
+
+`POST /assistant/web-test` 仅允许可信界面，输入 `{query}`，使用已保存且启用的搜索配置，返回 provider、sources 和引用提示。此入口执行真实服务调用并支持取消，不接受临时密钥或模型指定，不允许 Agent 宿主调用。无搜索结果块、上游拒绝、配置缺失等返回真实失败。
+
+搜索失败投影为可公开的业务错误：HTTP 400 用于配置或关键词无效，502 用于网络失败、供应商拒绝及响应格式错误，504 用于搜索超时。`reason` 区分 `web_search_network_failed`、`web_search_timeout`、`web_search_provider_rejected`、`web_search_response_invalid`、`web_search_native_failed` 与 `web_search_no_native_results`；`msg` 给出中文原因及检查方向，不包含密钥、上游原始响应体或内部网络异常。官方搜索域名的本机 TUN Fake-IP 兼容仅作用于搜索连接，不改变网页读取与下载的地址策略。
 
 下列 POST 路径均位于 `/assistant/projects/:projectId`，沿用当前用户工程归属和本机可信身份验证；助手宿主必须提交匹配当前工程的开放轮次。文件及脚本不使用计费生成的批准模式。
 
@@ -124,11 +136,11 @@ Agent 的 `edit_view` 复用这个读取入口：支持指定时间、当前选�
 | `/workspace/asset` | assetId、path；复制当前用户素材为新工作文件 |
 | `/workspace/publish` | path、可选 title；通过资源校验导入图片 / 视频 / 音频到资产库，按内容去重 |
 | `/assets/search` | query、kind、page；检索当前用户资产元数据，每页 30 条；素材理解另用 media_read / ASR |
-| `/web/search` | query；Tavily 真实来源列表，无密钥或未启用明确失败 |
+| `/web/search` | query；按用户配置使用 Tavily 或 DeepSeek 原生搜索，返回 provider 与真实来源列表；无密钥、未启用或无原生搜索结果明确失败，不自动切换服务 |
 | `/web/read` | url、可选 offset；公开 HTML/text/JSON，每页 20,000 字节，返回来源和 nextOffset |
 | `/web/download` | url、path；公共地址文件存入新工作文件，最多 256 MiB |
 
-Windows 脚本通过 AppContainer 和 Job Object 隔离，停止 / 超时 / 关闭后端结束子进程；其他平台尚不支持时拒绝执行。工作目录独立于原生轨道，入轨和撤销继续通过已有编辑接口。公共页面工具拒绝内网、回环、保留 IP 和危险重定向，不使用渠道私网豁免。详见 [Agent 工作目录、脚本与联网](/agent-workspace.md)。
+脚本默认使用当前系统账户的普通进程完全访问本机，工作目录不是文件或网络沙箱；运行环境不注入应用密钥。Windows Job Object、macOS/Linux 进程组用于停止和超时清理，其他平台拒绝执行。原生素材导入不要求本轮事先引用，但仍检查当前用户资产及工程归属，入轨和撤销保留版本保护。公共页面工具仍拒绝内网、回环、保留 IP 和危险重定向；完全访问脚本使用系统网络权限，两者范围不同。详见 [Agent 工作目录、脚本与联网](/agent-workspace.md)。
 
 `DELETE /assets/:id` 校验素材归属及业务引用。清空回收站时传 `expectedStatus=archived`，在删除事务内再次检查状态；期间已经还原的素材返回 409 并保留。该参数只接受 `archived`，其他值返回 400。省略参数保留普通删除语义，仍须通过引用检查。
 
@@ -209,6 +221,8 @@ Windows 脚本通过 AppContainer 和 Job Object 隔离，停止 / 超时 / 关�
 | `POST /assistant/steer` | `{canvasId,sessionId,turnId,instructionId,message}`：追加当前回合要求；Go 校验本人尚未结算的回合，宿主校验当前会话与正在执行的轮次，使用官方 pi 指令队列。相同编号与文本重试不重复入队；不同文本复用编号拒绝。素材范围和技能版本继续沿用本轮快照 |
 | `GET/PUT /assistant/host/config`、`POST /assistant/host/start|stop` | 宿主生命周期：需 owner 凭据 + 本机同源；启动命令只取本机配置，绝不接受请求体传入的可执行命令 |
 
+正文的 `text_delta` 带 `messageId`，消息结束的 `assistant_message` 包含 `messageId/text`，用于分开执行说明和最终回复。结算及历史轮次包含 `execution`（正文消息与工具身份的有序列表）、`finalMessageId` 和 `metrics`（`firstTokenMs/totalMs/requests/toolSteps`）。用时取宿主实际处理时间；页面不根据记录数量估算。过程记录不包含模型思考、工具参数或工具结果。
+
 按轮撤销不依赖浏览器流或宿主的最后一条消息：轮前文档由后端在转发前落盘，变更摘要由该轮自己的写入回执重建，
 因此浏览器断流（没有 `turn_end`）、用户取消或后端在回合中途重启之后，已经落地的助手写入仍然可以撤销。
 
@@ -226,12 +240,12 @@ Windows 脚本通过 AppContainer 和 Job Object 隔离，停止 / 超时 / 关�
 `received` 不代表已按要求修改成功。结束和历史中的 `instructions` 保留原文与状态；停止或退出前尚未处理的指令显示 `not_processed`，清空官方队列，避免进入下一回合。
 执行中仅补充当前任务要求；新增素材授权或切换技能需要另发一轮。
 
-`GET /assistant/history` 返回 `activeTurn` 或 `null`。断流、停止后与页面重开时，界面读取活动回合并追踪最终记录，不自动重放 `chat`。
+`GET /assistant/history` 返回 `activeTurn` 或 `null`。活动回合包含 `execution`（已有正文和工具顺序）、`toolActivity`（实际运行状态及经过过滤的输入／结果详情）和 `lifecycle`（思考、重试或压缩状态，不含推理正文）。重新进入时先加载运行端快照，再通过既有历史刷新持续更新；不把运行中的调用标成中断，不重复启动模型轮次。断流、停止后与页面重开时，界面读取活动回合并追踪最终记录，不自动重放 `chat`。
 每次工具开始和完成写入同一官方 SessionManager 的检查点，重开后可恢复已完成操作和任务/候选引用；不把缺少完成记录的调用判为成功。
 恢复制作仍需查询真实任务和工程历史，沿用现有操作回执、生成步骤身份和候选重复入轨保护；已受理的外部生成是否完成由原任务状态决定。
 剪辑读取正文和版本在同一工程锁内完成。人工修改后，冲突写入仍拒绝；只有明确重读当前内容后，后续修改才使用新版本。
-宿主对模型请求与工具步骤各自有单轮上限（`BEEFTV_AGENT_MAX_REQUESTS_PER_TURN`、
-`BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN`），按轮独立计数、下一轮从零开始；总预算
+宿主默认不设每轮模型请求次数或工具步数上限。显式设置正整数时，`BEEFTV_AGENT_MAX_REQUESTS_PER_TURN`、
+`BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN` 仍可限制对应额度，按轮独立计数、下一轮从零开始；达到额度时保存真实未完成原因。停止、单轮超时与无进展超时继续有效；总预算
 `BEEFTV_AGENT_TOTAL_REQUEST_BUDGET` 默认关闭，只有显式配置才启用。
 
 ### 外部客户端连接

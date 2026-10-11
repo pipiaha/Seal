@@ -6,6 +6,7 @@ import { useCanvasAssistant } from "@/pages/canvas/use-canvas-assistant";
 import { commitModelConfig, hydrateModelConfig } from "@/services/model-config-repository";
 import { useConfigStore } from "@/stores/use-config-store";
 import { ChannelSettingsPane } from "@/pages/settings/channel-settings-pane";
+import { ChannelModelSettings } from "@/pages/settings/channel-model-settings";
 import "@/pages/canvas/canvas-assistant-sidebar.css";
 
 const result = await hydrateModelConfig();
@@ -15,9 +16,11 @@ function Harness() {
     const [busy, setBusy] = useState(false);
     const [dark, setDark] = useState(false);
     const assistant = useCanvasAssistant({ canvasId: "c1", onCanvasChanged: () => {} });
+    const config = useConfigStore(state => state.config);
     return <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm }}><App>
         <main style={{ width: "100%", maxWidth: 380, background: dark ? "#141414" : "#fff" }}>
             {location.pathname === "/settings" ? <ChannelSettingsPane onOpenModels={() => {}} onOpenRunningHub={() => {}} /> : null}
+            {location.pathname === "/parameters" && config.channels[0] ? <ChannelModelSettings channel={config.channels[0]} onChange={profiles => useConfigStore.getState().updateConfig("channels", config.channels.map((channel, index) => index ? channel : { ...channel, modelProfiles: profiles }))} /> : null}
             <div className="canvas-assistant-composer-footer"><CanvasAssistantModelPicker busy={busy || assistant.modelBusy} /><button onClick={() => void assistant.send("synthetic", [])}>发送测试消息</button></div>
             <button onClick={() => setBusy(!busy)}>切换忙碌</button><button onClick={() => setDark(!dark)}>切换主题</button>
             <output>{assistant.error || ""}</output>

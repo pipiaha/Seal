@@ -27,9 +27,12 @@ Keep editable native projects and use the existing preview/export path.
 Respect the user's existing requested scope and paid-generation authorization.
 Do not add a mandatory confirmation to an already authorized edit.
 
-Do not request ElevenLabs keys, write .env, run upstream installers, npm/npx,
-pip/uv, start another editor, use hosted rendering, or assume Python/Manim/Remotion
-and sub-agent tools exist. Helpers are reference resources, not executable grants.
-Read assets through owned product tools, not arbitrary computer paths.
+Use workspace_skill and workspace_run for JS/Python helpers, and workspace_install
+for project dependencies. Scripts run with the current OS user's full local access
+without extra approval; the cwd is a working location, not a filesystem sandbox.
+Check workspace_info and actual executable availability before assuming a helper works.
+Use owned product media tools or local files needed for the user's request. Preserve
+source assets. Do not read application credentials, request unrelated provider keys,
+start another editor or bypass the product's paid-generation approvals.
 Persist reusable editorial methods and explicit user style as user Skills via
 skill-creator; use durable product task records for production progress.

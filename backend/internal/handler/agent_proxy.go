@@ -47,7 +47,7 @@ func newTurnID() string {
 // RegisterAgentProxyRoutes 让浏览器通过同源后端使用内置创作助手：
 // 页面只发业务消息，宿主凭据由后端注入；宿主不可用时返回明确状态而不是空回复。
 func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops.ClientRegistry, ui *uiSessionStore, host *assistantruntime.Host) {
-	client := agentHostClient(10 * time.Minute)
+	client := agentHostClient(0) // Host owns the total deadline; request cancellation still propagates.
 
 	guard := func(c *gin.Context, requireWrite bool) bool {
 		// 与 /agent-ops 完全相同的来源校验：Host/RemoteAddr/Origin 都必须是本机且同源。
@@ -95,6 +95,8 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			return
 		}
 		modelInfo := gin.H{"id": provider.Model, "channelId": provider.ChannelID, "channelName": provider.ChannelName, "maxImages": provider.MaxImages, "maxImageBytes": provider.MaxImageBytes}
+		modelInfo["maxOutputTokens"], modelInfo["contextWindow"] = provider.MaxOutputTokens, provider.ContextWindow
+		modelInfo["reasoningFormat"], modelInfo["reasoningEffort"] = provider.ReasoningFormat, provider.ReasoningEffort
 		health := host.Probe(c.Request.Context())
 		state := host.State()
 		if health.OK {

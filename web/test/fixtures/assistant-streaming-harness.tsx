@@ -20,7 +20,7 @@ function Harness() {
         <div style={{ display: 'flex', height: '100vh', padding: 20, gap: 24, background: 'var(--background)', color: 'var(--foreground)' }}>
             <div style={{ width: 270, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <h1>助手流式验收</h1><p>模拟数据，不调用模型。</p>
-                <button disabled={assistant.streaming} onClick={() => setCanvasId(value => value === 'short' ? 'long' : 'short')}>切换长短对话</button>
+                <button onClick={() => setCanvasId(value => value === 'short' ? 'long' : 'short')}>切换长短对话</button>
                 <button disabled={assistant.streaming} onClick={() => void assistant.send('请检查片段并说明结果', [])}>发送模拟请求</button>
                 <button onClick={() => void fetch('/fixture/advance', { method: 'POST' })}>推进工具</button>
                 <button onClick={() => void fetch('/fixture/finish', { method: 'POST' })}>结束回复</button>

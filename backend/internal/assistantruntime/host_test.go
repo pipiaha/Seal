@@ -14,6 +14,20 @@ func testProvider() assistant.Provider {
 	return assistant.Provider{Model: "gpt-5.5", BaseURL: "https://beefapi.com/v1", APIKey: "test-key", Protocol: "chat-completion"}
 }
 
+func TestHostEnvExecutionConfigOverridesStaleInheritedValues(t *testing.T) {
+	host := New(Options{DataDir: t.TempDir(), Environ: func() []string { return []string{"BEEFTV_AGENT_MAX_TOKENS=4096", "BEEFTV_AGENT_REASONING_EFFORT=off"} }})
+	provider := testProvider()
+	provider.MaxOutputTokens, provider.ContextWindow = 49152, 131072
+	provider.ReasoningFormat, provider.ReasoningEffort = "deepseek", "high"
+	provider.ReasoningLevels = []string{"off", "low", "high", "max"}
+	env := host.buildEnv(provider, childPin{})
+	for key, want := range map[string]string{"BEEFTV_AGENT_MAX_TOKENS": "49152", "BEEFTV_AGENT_CONTEXT_WINDOW": "131072", "BEEFTV_AGENT_REASONING_FORMAT": "deepseek", "BEEFTV_AGENT_REASONING_EFFORT": "high", "BEEFTV_AGENT_REASONING_LEVELS": `["off","low","high","max"]`} {
+		if got := envValue(env, key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func testPin(opsURL, desktop string) childPin {
 	return childPin{OpsURL: opsURL, DesktopTok: desktop}
 }

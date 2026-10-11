@@ -1,5 +1,5 @@
 import { App, Button } from "antd";
-import { ArrowLeft, Film, Image, Mic, Speech, Type } from "lucide-react";
+import { ArrowLeft, Film, Globe, Image, Mic, Speech, Type } from "lucide-react";
 import { useLayoutEffect, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { PageHeader } from "@/components/layout/workspace-page";
@@ -12,7 +12,11 @@ import { ModelChannelDefaults } from "./model-channel-defaults";
 import { AsrSettingsPane } from "./asr-settings-pane";
 import { VoiceSettingsPane } from "./voice-settings-pane";
 import { AssistantToolsPane } from "./assistant-tools-pane";
+import { SearchSettingsPane } from "./search-settings-pane";
 import "./model-channel-settings.css";
+
+type SettingsCategory = ModelChannelCategory | "search";
+const SETTINGS_CATEGORIES = [...MODEL_CHANNEL_CATEGORIES, { value: "search", label: "联网搜索" }] as const;
 
 export function isConfigSection(value: string | null): value is "channels" | "models" {
     return value === "channels" || value === "models";
@@ -23,33 +27,33 @@ export default function SettingsPage() {
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const requested = searchParams.get("capability");
-    const category: ModelChannelCategory = MODEL_CHANNEL_CATEGORIES.find((item) => item.value === requested)?.value || "text";
+    const category: SettingsCategory = SETTINGS_CATEGORIES.find((item) => item.value === requested)?.value || "text";
     const customChannelsEnabled = useUserStore((state) => state.features.customChannelsEnabled);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const shouldPromptContinue = searchParams.get("continue") === "1";
-    const icons = { text: Type, image: Image, video: Film, audio: Speech, asr: Mic };
+    const icons = { text: Type, image: Image, video: Film, audio: Speech, asr: Mic, search: Globe };
 
     useLayoutEffect(() => {
         document.body.classList.add("app-user-overlays");
         return () => document.body.classList.remove("app-user-overlays");
     }, []);
 
-    const selectCategory = (value: ModelChannelCategory) => {
+    const selectCategory = (value: SettingsCategory) => {
         const next = new URLSearchParams(searchParams);
         next.set("capability", value);
         setSearchParams(next, { replace: true });
     };
     const navigateTabs = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
         let target: number;
-        if (event.key === "ArrowRight") target = (index + 1) % MODEL_CHANNEL_CATEGORIES.length;
-        else if (event.key === "ArrowLeft") target = (index + MODEL_CHANNEL_CATEGORIES.length - 1) % MODEL_CHANNEL_CATEGORIES.length;
+        if (event.key === "ArrowRight") target = (index + 1) % SETTINGS_CATEGORIES.length;
+        else if (event.key === "ArrowLeft") target = (index + SETTINGS_CATEGORIES.length - 1) % SETTINGS_CATEGORIES.length;
         else if (event.key === "Home") target = 0;
-        else if (event.key === "End") target = MODEL_CHANNEL_CATEGORIES.length - 1;
+        else if (event.key === "End") target = SETTINGS_CATEGORIES.length - 1;
         else return;
         event.preventDefault();
-        const next = MODEL_CHANNEL_CATEGORIES[target].value;
+        const next = SETTINGS_CATEGORIES[target].value;
         selectCategory(next);
         document.getElementById(`model-channel-tab-${next}`)?.focus();
     };
@@ -72,14 +76,14 @@ export default function SettingsPage() {
             <div className="model-settings-workspace">
                 <PageHeader title="模型配置" description="按创作用途管理渠道与模型" actions={shouldPromptContinue ? <div className="flex gap-2"><Button icon={<ArrowLeft size={15} />} onClick={() => navigate(-1)}>返回创作</Button><Button type="primary" onClick={() => void finishConfig()}>保存并返回</Button></div> : undefined} />
                 <div className="model-channel-tabs" role="tablist" aria-label="渠道类型">
-                    {MODEL_CHANNEL_CATEGORIES.map((item, index) => {
+                    {SETTINGS_CATEGORIES.map((item, index) => {
                         const Icon = icons[item.value];
-                        const count = item.value === "asr" ? null : config.channels.filter((channel) => channel.scope !== "system" && channelModelsForCapability(channel, item.value).length > 0).length;
+                        const count = item.value === "asr" || item.value === "search" ? null : config.channels.filter((channel) => channel.scope !== "system" && channelModelsForCapability(channel, item.value).length > 0).length;
                         return <button id={`model-channel-tab-${item.value}`} key={item.value} type="button" className="model-channel-tab" role="tab" aria-selected={category === item.value} aria-controls="model-channel-panel" tabIndex={category === item.value ? 0 : -1} onClick={() => selectCategory(item.value)} onKeyDown={(event) => navigateTabs(event, index)}><Icon aria-hidden="true" />{item.label}{count !== null && <span>{count}</span>}</button>;
                     })}
                 </div>
                 <section id="model-channel-panel" role="tabpanel" aria-labelledby={`model-channel-tab-${category}`}>
-                    {category === "asr" ? <AsrSettingsPane /> : <>
+                    {category === "search" ? <SearchSettingsPane /> : category === "asr" ? <AsrSettingsPane /> : <>
                         <ModelChannelDefaults config={effectiveConfig} capability={category} onChange={(key, model) => updateConfig(key, model)} />
                         {category === "audio" && <VoiceSettingsPane />}
                         {customChannelsEnabled ? <ChannelSettingsPane key={category} capability={category} /> : <p className="mt-5 text-xs text-foreground/55">模型服务由系统管理，可在上方选择默认模型。</p>}

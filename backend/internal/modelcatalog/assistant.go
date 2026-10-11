@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"regexp"
 	"strings"
 
 	"infinite-canvas/backend/internal/assistant"
@@ -12,6 +13,7 @@ const (
 	AssistantReasonModelNotConfigured  = assistant.ReasonModelNotConfigured
 	AssistantReasonCredentialMissing   = assistant.ReasonCredentialMissing
 	AssistantReasonProtocolUnsupported = assistant.ReasonProtocolUnsupported
+	AssistantReasonParametersInvalid   = assistant.ReasonParametersInvalid
 )
 
 // assistantProtocols 是助手会话支持的文本协议。配置里历史上同时出现
@@ -31,9 +33,16 @@ type AssistantModelProfile struct {
 	Protocol         string `json:"protocol"`
 	CapabilityConfig struct {
 		Text struct {
-			References struct {
-				MaxImages     int `json:"maxImages"`
-				MaxImageBytes int `json:"maxImageBytes"`
+			MaxOutputTokens  int      `json:"maxOutputTokens"`
+			OutputTokenLimit int      `json:"outputTokenLimit"`
+			ContextWindow    int      `json:"contextWindow"`
+			ReasoningFormat  string   `json:"reasoningFormat"`
+			ReasoningEffort  string   `json:"reasoningEffort"`
+			ReasoningLevels  []string `json:"reasoningLevels"`
+			Thinking         *bool    `json:"thinking"`
+			References       struct {
+				MaxImages     *int `json:"maxImages"`
+				MaxImageBytes *int `json:"maxImageBytes"`
 			} `json:"references"`
 		} `json:"text"`
 	} `json:"capabilityConfig"`
@@ -85,6 +94,8 @@ func AssistantReasonMessage(reason string) string {
 		return "该渠道还没有可用的密钥"
 	case AssistantReasonProtocolUnsupported:
 		return "该模型的协议不支持内置助手会话"
+	case AssistantReasonParametersInvalid:
+		return "模型输出或思考参数无效，请在模型配置的能力与参数中检查"
 	default:
 		return "尚未选择可用的助手文本模型"
 	}
@@ -151,13 +162,43 @@ func ResolveAssistantChannelModel(snapshot AssistantConfigSnapshot, modelKey str
 		ChannelID: channel.ID, ChannelName: AssistantChannelName(channel),
 		Model: modelID, ModelKey: modelKey, Protocol: protocol,
 		BaseURL: strings.TrimSpace(channel.BaseURL), APIKey: strings.TrimSpace(channel.APIKey),
+		MaxOutputTokens: 49152, ContextWindow: 200000, ReasoningFormat: "auto",
+		MaxImages: 8, MaxImageBytes: 4 << 20,
 	}
 	for _, profile := range channel.ModelProfiles {
 		if assistantModelAlias(channel, profile.Model) == modelID {
+			text := profile.CapabilityConfig.Text
+			if err := validateTextExecutionSettings(&TextCapabilityConfig{MaxOutputTokens: text.MaxOutputTokens, OutputTokenLimit: text.OutputTokenLimit, ContextWindow: text.ContextWindow, ReasoningFormat: text.ReasoningFormat, ReasoningEffort: text.ReasoningEffort, ReasoningLevels: text.ReasoningLevels}); err != nil {
+				return assistant.Provider{}, AssistantReasonParametersInvalid
+			}
+			if strings.HasPrefix(text.ReasoningFormat, "anthropic-") && protocol != "claude-api" || (text.ReasoningFormat == "openrouter" || text.ReasoningFormat == "zai" || text.ReasoningFormat == "qwen") && protocol != "chat-completion" {
+				return assistant.Provider{}, AssistantReasonParametersInvalid
+			}
+			if text.MaxOutputTokens > 0 {
+				provider.MaxOutputTokens = text.MaxOutputTokens
+			}
+			if text.OutputTokenLimit > 0 {
+				provider.MaxOutputTokens = min(provider.MaxOutputTokens, text.OutputTokenLimit)
+			}
+			if text.ContextWindow > 0 {
+				provider.ContextWindow = text.ContextWindow
+			}
+			if text.ReasoningFormat != "" {
+				provider.ReasoningFormat = text.ReasoningFormat
+			}
+			if text.Thinking != nil && !*text.Thinking && provider.ReasoningFormat == "auto" {
+				provider.ReasoningFormat = "none"
+			}
+			provider.ReasoningEffort, provider.ReasoningLevels = text.ReasoningEffort, text.ReasoningLevels
 			refs := profile.CapabilityConfig.Text.References
-			if refs.MaxImages > 0 && refs.MaxImageBytes > 0 {
-				provider.MaxImages = min(refs.MaxImages, 8)
-				provider.MaxImageBytes = min(refs.MaxImageBytes, 4<<20)
+			if refs.MaxImages != nil {
+				provider.MaxImages = min(max(*refs.MaxImages, 0), 8)
+			}
+			if refs.MaxImageBytes != nil {
+				provider.MaxImageBytes = min(max(*refs.MaxImageBytes, 0), 4<<20)
+			}
+			if provider.MaxImages == 0 || provider.MaxImageBytes == 0 {
+				provider.MaxImages, provider.MaxImageBytes = 0, 0
 			}
 			break
 		}
@@ -181,7 +222,72 @@ func ResolveAssistantChannelModel(snapshot AssistantConfigSnapshot, modelKey str
 	if provider.BaseURL == "" {
 		return assistant.Provider{}, AssistantReasonModelNotConfigured
 	}
+	if !resolveAssistantReasoning(&provider) {
+		return assistant.Provider{}, AssistantReasonParametersInvalid
+	}
 	return provider, ""
+}
+
+var assistantReasoningModel = regexp.MustCompile(`(?i)^(?:gpt-[5-9]|o[134](?:-|$))`)
+var assistantAdaptiveModel = regexp.MustCompile(`(?i)claude-(?:opus|sonnet)-(?:4[.-][6-9]|[5-9])`)
+
+// Resolve once so status, fingerprint and child requests agree on the applied settings.
+func resolveAssistantReasoning(provider *assistant.Provider) bool {
+	format := provider.ReasoningFormat
+	if format == "auto" || format == "" {
+		switch {
+		case strings.Contains(strings.ToLower(provider.Model), "deepseek") || strings.Contains(strings.ToLower(provider.BaseURL), "api.deepseek.com"):
+			format = "deepseek"
+		case provider.Protocol == "claude-api":
+			format = "anthropic-budget"
+			if assistantAdaptiveModel.MatchString(provider.Model) {
+				format = "anthropic-adaptive"
+			}
+		case strings.Contains(strings.ToLower(provider.BaseURL), "openrouter.ai"):
+			format = "openrouter"
+		case assistantReasoningModel.MatchString(provider.Model):
+			format = "openai"
+		default:
+			format = "none"
+		}
+	}
+	provider.ReasoningFormat = format
+	if format == "none" {
+		provider.ReasoningEffort = ""
+		provider.ReasoningLevels = nil
+		return true
+	}
+	if len(provider.ReasoningLevels) == 0 {
+		switch format {
+		case "deepseek":
+			provider.ReasoningLevels = []string{"off", "low", "high", "max"}
+		case "zai", "qwen":
+			provider.ReasoningLevels = []string{"off", "high"}
+		case "openai":
+			provider.ReasoningLevels = []string{"low", "medium", "high"}
+		default:
+			provider.ReasoningLevels = []string{"off", "low", "medium", "high"}
+		}
+	}
+	if provider.ReasoningEffort == "" {
+		fallback := "medium"
+		if format == "deepseek" || format == "zai" || format == "qwen" {
+			fallback = "high"
+		}
+		provider.ReasoningEffort = provider.ReasoningLevels[0]
+		for _, level := range provider.ReasoningLevels {
+			if level == fallback {
+				provider.ReasoningEffort = fallback
+				break
+			}
+		}
+	}
+	for _, level := range provider.ReasoningLevels {
+		if level == provider.ReasoningEffort {
+			return true
+		}
+	}
+	return false
 }
 
 func FindAssistantChannel(channels []AssistantChannel, channelID, modelID string) (AssistantChannel, bool) {

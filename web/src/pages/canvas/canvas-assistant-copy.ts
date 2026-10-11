@@ -20,6 +20,8 @@ export function assistantStatusNotice(reason: string | undefined): AssistantStat
         case "model_not_configured":
         case "model_protocol_unsupported":
             return { text: "还没有可用的助手模型", actionLabel: "去模型配置", action: "model-settings" };
+        case "model_parameters_invalid":
+            return { text: "模型输出或思考参数无效", actionLabel: "检查模型参数", action: "model-settings" };
         case "credential_missing":
             return { text: "BeefAPI 还没连接好", actionLabel: "去连接", action: "model-settings" };
         case "host_starting":
@@ -113,12 +115,15 @@ export const ASSISTANT_STARTER_PROMPTS = [
 ];
 
 /** 官方压缩/重试进度：只说现在在做什么，不提内部事件名。 */
-export function assistantLifecycleText(event: Pick<AgentLifecycleEvent, "phase"> | string | null | undefined): string | null {
+export function assistantLifecycleText(event: Pick<AgentLifecycleEvent, "phase" | "reason"> | string | null | undefined): string | null {
     const phase = typeof event === "string" ? event : event?.phase;
     switch (phase) {
+        case "thinking":
+            return "助手正在思考…";
         case "compaction":
             return "正在整理对话内容，方便继续。";
         case "retry":
+            if (typeof event === "object" && event?.reason === "model_output_truncated") return "模型输出达到上限，正在保留已有结果并继续制作。";
             return "模型暂时没响应，正在再试一次。";
         default:
             return null;

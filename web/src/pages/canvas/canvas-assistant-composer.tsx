@@ -78,6 +78,8 @@ export function CanvasAssistantComposer({
     const [contentHeight, setContentHeight] = useState(LINE_HEIGHT);
     const height = Math.min(MAX_LINES * LINE_HEIGHT, Math.max(MIN_LINES * LINE_HEIGHT, contentHeight));
     const canSend = !disabled && !imageBusy && (streaming ? canSupplement : !modelBusy) && !skillPicker.blocked && Boolean(value.trim() || images.length || media.length);
+    const hasDraft = Boolean(value.trim() || (!streaming && (images.length || media.length)));
+    const showStop = (streaming || mediaBusy) && !hasDraft;
 
     return (
         <footer ref={composerRef} className="canvas-assistant-composer" onKeyDownCapture={skillPicker.onKeyDownCapture}
@@ -125,7 +127,7 @@ export function CanvasAssistantComposer({
                     className="thin-scrollbar h-full w-full resize-none overflow-y-auto border-none bg-transparent px-3 py-1.5 text-[var(--fs-caption)] leading-[21px] !shadow-none !outline-none !ring-0 focus:!shadow-none focus:!outline-none focus:!ring-0 placeholder:text-[var(--muted-foreground)]"
                     onContentSizeChange={setContentHeight}
                     disabled={disabled}
-                    placeholder={streaming ? '补充当前任务的要求，例如：字幕改成白色' : '描述想法，可粘贴图片，@ 引用素材，/ 选择技能'}
+                    placeholder={streaming ? '消息将排队，也可点击引导加入当前任务' : '描述想法，可粘贴图片，@ 引用素材，/ 选择技能'}
                     aria-label="给助手的消息"
                 />
             </div>
@@ -142,9 +144,8 @@ export function CanvasAssistantComposer({
                 {skillPicker.button}
                 <CanvasAssistantModelPicker busy={disabled || streaming || Boolean(modelBusy)} />
                 {onPermissionModeChange?<Dropdown trigger={['click']} menu={{selectedKeys:[permissionMode],items:[{key:'ask',label:'请求批准'},{key:'allow',label:'完全允许'}],onClick:({key})=>onPermissionModeChange(key as AssistantPermissionMode)}}><Tooltip title={permissionMode==='allow'?'允许助手直接使用已配置渠道生成图片、视频和配音':'生成图片、视频和配音前请求你批准'}><Button type="text" size="small" loading={permissionBusy} disabled={disabled || permissionBusy} aria-label="助手权限模式">{permissionMode==='allow'?'完全允许':'请求批准'}</Button></Tooltip></Dropdown>:null}
-                {streaming || mediaBusy ? <Button size="small" icon={<Square className="size-3" />} onClick={onStop}>停止</Button> : null}
-                <Tooltip title={streaming ? '补充要求将在当前工具步骤结束后读取' : 'Enter 发送 · Shift + Enter 换行'} placement="topRight">
-                    <Button className="canvas-assistant-send" shape="circle" type="primary" aria-label={streaming ? '补充要求' : '发送'} disabled={!canSend} icon={<ArrowUp className="size-4" />} onClick={onSend} />
+                <Tooltip title={showStop ? '停止当前任务，保留排队消息' : streaming ? '加入队列，当前轮结束后发送' : 'Enter 发送 · Shift + Enter 换行'} placement="topRight">
+                    <Button className="canvas-assistant-send" shape="circle" type="primary" aria-label={showStop ? '停止' : streaming ? '排队发送' : '发送'} disabled={showStop ? false : !canSend} icon={showStop ? <Square className="size-3.5" /> : <ArrowUp className="size-4" />} onClick={showStop ? onStop : onSend} />
                 </Tooltip>
             </div>
         </footer>

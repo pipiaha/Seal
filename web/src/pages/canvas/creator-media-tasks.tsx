@@ -24,7 +24,7 @@ const submitting = new Set<string>();
 const continuing = new Set<string>();
 type MediaOutcome = { assetIDs: string[]; status: string; error?: string };
 
-export function useCreatorMediaActions(assistant: CanvasAssistantController, readOnly = false) {
+export function useCreatorMediaActions(assistant: CanvasAssistantController, readOnly = false, userQueue?: { current: boolean }) {
     const projectId = assistant.projectId;
     const onStarted = assistant.markProposalHandled;
     const config = useEffectiveConfig();
@@ -45,6 +45,7 @@ export function useCreatorMediaActions(assistant: CanvasAssistantController, rea
         paused.current = false;
     }
     const [outcomeRevision, setOutcomeRevision] = useState(0);
+    const notifyUserQueueChanged = useCallback(() => setOutcomeRevision(value => value + 1), []);
     const [permissionBusy, setPermissionBusy] = useState(false);
     const [continuingContext, setContinuingContext] = useState<string | null>(null);
     const [feedback, setFeedback] = useState<Record<string, string>>({});
@@ -104,7 +105,7 @@ export function useCreatorMediaActions(assistant: CanvasAssistantController, rea
     );
     useEffect(() => {
         const current = assistantRef.current;
-        if (readOnly || paused.current || current.streaming || current.sessionBusy || current.error || !current.historyLoaded || continuingContext === context) return;
+        if (readOnly || paused.current || userQueue?.current || current.streaming || current.sessionBusy || current.error || !current.historyLoaded || continuingContext === context) return;
         const item = items.find((item) => item.sessionId === current.sessionId && item.autoContinue && !item.continuationTurnId && !attempted.current.has(item.proposalId) && (item.decision === "rejected" || outcomes.current.has(item.proposalId)));
         if (!item) return;
         const key = `${context}:${item.proposalId}`;
@@ -196,6 +197,7 @@ export function useCreatorMediaActions(assistant: CanvasAssistantController, rea
         pending,
         permissionError: policy.isError ? "对话权限读取失败，自动生成暂停" : proposals.isError ? "制作任务读取失败，请重新读取" : undefined,
         resume,
+        notifyUserQueueChanged,
     };
 }
 

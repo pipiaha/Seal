@@ -23,6 +23,7 @@ import { createSkillReadBridge, loadSelectedSkill, selectedSkillPrompt, remember
 import { TURN_ENTRY_TYPE, createSessionStore } from './session-owner.mjs';
 import { compactTurnContext } from './turn-context.mjs';
 import { queueTurnInstruction, turnInstructions } from './turn-instructions.mjs';
+import { modelOutputLimit, modelReasoningPolicy } from './output-policy.mjs';
 
 const OPS_URL = (process.env.BEEFTV_OPS_URL || 'http://127.0.0.1:18090/api').replace(/\/+$/, '');
 const HOST_TOKEN = process.env.BEEFTV_AGENT_HOST_TOKEN || '';
@@ -42,11 +43,16 @@ const MODEL_ID = (process.env.BEEFTV_AGENT_MODEL || '').trim();
 const MODEL_API = (process.env.BEEFTV_AGENT_API || 'openai-completions').trim();
 const BASE_URL = (process.env.BEEFTV_AGENT_BASE_URL || '').replace(/\/+$/, '');
 const API_KEY = process.env.BEEFTV_AGENT_API_KEY || '';
-const MAX_OUTPUT_TOKENS = Number(process.env.BEEFTV_AGENT_MAX_TOKENS || 4096);
+const MAX_OUTPUT_TOKENS = modelOutputLimit(MODEL_ID, process.env.BEEFTV_AGENT_MAX_TOKENS);
 const CONTEXT_WINDOW = Number(process.env.BEEFTV_AGENT_CONTEXT_WINDOW || 200000);
-const TURN_TIMEOUT_MS = Number(process.env.BEEFTV_AGENT_TURN_TIMEOUT_MS || 180000);
-const MAX_REQUESTS_PER_TURN = Number(process.env.BEEFTV_AGENT_MAX_REQUESTS_PER_TURN || 40);
-const MAX_TOOL_STEPS_PER_TURN = Number(process.env.BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN || 40);
+const TURN_TIMEOUT_MS = Number(process.env.BEEFTV_AGENT_TURN_TIMEOUT_MS || 900000);
+const IDLE_TIMEOUT_MS = Number(process.env.BEEFTV_AGENT_IDLE_TIMEOUT_MS || 180000);
+const REASONING_POLICY = modelReasoningPolicy({ api: MODEL_API, modelId: MODEL_ID, baseUrl: BASE_URL,
+  format: process.env.BEEFTV_AGENT_REASONING_FORMAT || 'auto', effort: process.env.BEEFTV_AGENT_REASONING_EFFORT || '',
+  levels: JSON.parse(process.env.BEEFTV_AGENT_REASONING_LEVELS || 'null') || [],
+});
+const MAX_REQUESTS_PER_TURN = Number(process.env.BEEFTV_AGENT_MAX_REQUESTS_PER_TURN || 0);
+const MAX_TOOL_STEPS_PER_TURN = Number(process.env.BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN || 0);
 const LIFETIME_REQUEST_BUDGET = Number(process.env.BEEFTV_AGENT_TOTAL_REQUEST_BUDGET || 0);
 const MAX_BODY_BYTES = 18 * 1024 * 1024;
 const MAX_IMAGES = Number(process.env.BEEFTV_AGENT_MAX_IMAGES || 0);
@@ -82,6 +88,7 @@ async function initializeModel() {
       maxTokens: MAX_OUTPUT_TOKENS, contextWindow: CONTEXT_WINDOW,
       maxImages: MAX_IMAGES,
       maxImageBytes: MAX_IMAGE_BYTES,
+      reasoningPolicy: REASONING_POLICY,
     }));
     MODEL = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
     if (!MODEL) { providerReason = 'model_not_configured'; return; }
@@ -140,6 +147,7 @@ const ops = createOperationBridge({
 
 const skillRead = createSkillReadBridge({ turnBudgetContext });
 const store = createSessionStore({
+  thinkingLevel: REASONING_POLICY.level,
   turnBudgetContext,
   sessionRoot: SESSION_ROOT,
   workspaceRoot: WORKSPACE_ROOT,
@@ -220,6 +228,15 @@ function anySessionBusy() {
   return false;
 }
 
+function activeTurnSnapshot(entry, sessionId) {
+  if (!entry?.busy || entry.sessionId !== sessionId) return null;
+  return { turnId: entry.turn.turnId, sessionId, userText: entry.turn.userText || '',
+    selectedNodeIds: entry.turn.selectedNodeIds || [],
+    instructions: turnInstructions(entry.manager.getEntries(), entry.turn.turnId),
+    execution: entry.progress?.execution || [], toolActivity: entry.progress?.activeToolActivity || [],
+    lifecycle: entry.progress?.lifecycle || null };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const auth = authorized(req);
@@ -296,18 +313,13 @@ const server = http.createServer(async (req, res) => {
         const empty = unflushedSessionHistory(sessionId, active);
         if (empty) {
           const active = store.sessions.get(canvasId);
-          respond(res, 200, { ...empty, activeTurn: active?.busy && active.sessionId === sessionId ? {
-            turnId: active.turn.turnId, sessionId, userText: active.turn.userText || '', selectedNodeIds: active.turn.selectedNodeIds || [],
-            instructions: turnInstructions(active.manager.getEntries(), active.turn.turnId),
-          } : null }); return;
+          respond(res, 200, { ...empty, activeTurn: activeTurnSnapshot(active, sessionId) }); return;
         }
         respond(res, 404, { code: 404, reason: 'session_not_found' }); return;
       }
       const active = store.sessions.get(canvasId);
       respond(res, 200, { sessionId, turns: store.turnEntries(SessionManager.open(file, sessionDir, cwd)),
-        activeTurn: active?.busy && active.sessionId === sessionId ? { turnId: active.turn.turnId, sessionId,
-          userText: active.turn.userText || '', selectedNodeIds: active.turn.selectedNodeIds || [],
-          instructions: turnInstructions(active.manager.getEntries(), active.turn.turnId) } : null });
+        activeTurn: activeTurnSnapshot(active, sessionId) });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/steer') {
@@ -382,36 +394,39 @@ const server = http.createServer(async (req, res) => {
         const before = entry.log.length;
         const started = Date.now();
         let firstTokenMs = null;
-        const { observer, error: promptError, timedOut } = await store.runOwnedPrompt(entry, message, {
+        const { observer, error: promptError, timedOut, idleTimedOut } = await store.runOwnedPrompt(entry, message, {
           onEvent: (payload) => {
             if (payload.type === 'text_delta' && firstTokenMs === null) firstTokenMs = Date.now() - started;
             sendLine(res, payload);
           },
           runWithBudget: (fn) => turnBudgetContext.run(budget, fn),
           timeoutMs: TURN_TIMEOUT_MS,
+          idleTimeoutMs: IDLE_TIMEOUT_MS,
           images: visual.images,
         });
         const completion = modelTurnCompletion(observer.lastAssistantMessage, promptError, budget.failure, {
-          cancelled: entry.generation.aborted, timedOut,
+          cancelled: entry.generation.aborted, timedOut, idleTimedOut,
         });
         const reply = completion.reply;
         const error = completion.error;
         const errorReason = completion.errorReason;
         const toolCalls = entry.log.slice(before);
         const toolActivity = observer.toolActivity;
+        const execution = observer.execution;
+        const finalMessageId = observer.finalMessageId;
+        const metrics = { firstTokenMs, totalMs: Date.now() - started, requests: budget.requests, toolSteps: budget.toolSteps };
         const change = turnChange(entry.turn);
         const proposals = [...entry.turn.proposals];
         const workflows = entry.turn.workflowJournal.read().filter(item => item.turnId === turnId);
         const instructions = turnInstructions(entry.manager.getEntries(), turnId).map(item => ({ ...item, state: item.state === 'queued' ? 'not_processed' : item.state }));
         entry.session.clearQueue();
-        const record = { turnId, userText, images: visual.metadata, media: mediaMetadata, selectedNodeIds: selected, references, requestedSkill, reply, toolCalls, toolActivity, change, proposals, workflows, instructions, skillsUsed: entry.turn.skillsUsed,
+        const record = { turnId, userText, images: visual.metadata, media: mediaMetadata, selectedNodeIds: selected, references, requestedSkill, reply, toolCalls, toolActivity, execution, finalMessageId, metrics, change, proposals, workflows, instructions, skillsUsed: entry.turn.skillsUsed,
           error, errorReason, cancelled: entry.generation.aborted, createdAt: new Date().toISOString() };
         try { entry.manager.appendCustomEntry(TURN_ENTRY_TYPE, record); }
         catch (persistError) { console.error(`agent-host: 轮次记录写入失败 ${persistError?.message || persistError}`); }
-        sendLine(res, { type: 'turn_end', turnId, images: visual.metadata, media: mediaMetadata, reply, toolCalls, toolActivity, change, proposals, workflows, instructions, requestedSkill, skillsUsed: entry.turn.skillsUsed, error, errorReason,
+        sendLine(res, { type: 'turn_end', turnId, images: visual.metadata, media: mediaMetadata, reply, toolCalls, toolActivity, execution, finalMessageId, metrics, change, proposals, workflows, instructions, requestedSkill, skillsUsed: entry.turn.skillsUsed, error, errorReason,
           cancelled: entry.generation.aborted, persistence: entry.persistence,
-          sessionId: entry.sessionId, metrics: { firstTokenMs, totalMs: Date.now() - started,
-            requests: budget.requests, toolSteps: budget.toolSteps } });
+          sessionId: entry.sessionId });
         res.end();
         return;
       } finally {

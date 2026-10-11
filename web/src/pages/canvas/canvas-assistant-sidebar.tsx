@@ -3,7 +3,9 @@ import { History, MessageSquarePlus, X, Clapperboard, ArrowUpRight } from "lucid
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WorkingDots } from "@/components/ai/working-indicator";
 import { CanvasAssistantHistory } from "./canvas-assistant-history";
-import { AssistantToolActivityView } from "./assistant-tool-activity-view";
+import { AssistantExecutionProcess } from './assistant-execution-process';
+import { useAssistantMessageQueue, type QueuedAssistantMessage } from './use-assistant-message-queue';
+import { AssistantMessageQueueView } from './assistant-message-queue-view';
 
 import { AppDrawer } from "@/components/ui/product/app-drawer";
 import { referencedAssetIdsInPrompt, buildAssetMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -45,7 +47,8 @@ type Props = {
 
 export function CanvasAssistantSidebar(props: Props) {
     const { assistant, canvasTitle, dockable, readOnly, selectedNodeIds, references, onLocateNodes, onRunProposal, onOpenModelSettings } = props;
-    const mediaActions = useCreatorMediaActions(assistant,readOnly);
+    const pendingUserQueue = useRef(false);
+    const mediaActions = useCreatorMediaActions(assistant,readOnly,pendingUserQueue);
     const callbacksRef = useRef({ onLocateNodes, onRunProposal });
     callbacksRef.current = { onLocateNodes, onRunProposal };
     const locateNodes = useCallback((ids: string[]) => callbacksRef.current.onLocateNodes(ids), []);
@@ -156,52 +159,67 @@ export function CanvasAssistantSidebar(props: Props) {
     useLayoutEffect(() => {
         const node = logRef.current;
         if (node && followLatestRef.current) node.scrollTop = node.scrollHeight;
-    }, [turnCount, assistant.streamed, assistant.pendingUserText, assistant.lifecycleNotice, assistant.toolActivity, proposalFeedback]);
+    }, [turnCount, assistant.streamed, assistant.pendingUserText, assistant.lifecycleNotice, assistant.toolActivity, assistant.execution, proposalFeedback]);
 
     const notice = assistant.status && !assistant.status.available && assistant.status.reason !== "host_starting" ? assistantStatusNotice(assistant.status.reason) : null;
     const composerDisabled = readOnly;
     const composerReason = readOnly ? "这个画布是只读的，不能让助手改动。" : undefined;
     const attachedIds = selectionAttached ? selectedNodeIds : [];
 
-    const send = useCallback(() => {
-        const text = draft.trim() || (images.length || media.length ? '请分析这些附件。' : '');
-        if (!text || readOnly || assistant.sessionBusy || imageBusy || preparingRef.current) return;
-        if (assistant.streaming) {
-            if (referencedAssetIdsInPrompt(text).length || selectedSkill || images.length || media.length) {
-                message.info('补充要求沿用当前素材和技能；添加新素材或切换技能请在这轮结束后发送。');
-                return;
-            }
-            void assistant.supplement(text).then(accepted => { if (accepted) setDraft(current => current === text ? '' : current); });
-            return;
-        }
+    const dispatchMessage = useCallback(async (text: string, nodeIds: string[], options: { queued?: boolean; onAdmitted?: () => void } = {}) => {
+        if (!text || readOnly || assistant.streaming || assistant.sessionBusy || preparingRef.current) return false;
+        const queued = Boolean(options.queued);
+        const attachedImages = queued ? [] : images;
+        const attachedMedia = queued ? [] : media;
+        const requestedSkill = queued ? undefined : selectedSkill ?? undefined;
         // @ 引用到的素材库素材由界面按用户原文推导后交给后端校验归属：
         // 模型不能自己声明要读哪些素材。
-        const assetReferences = [...new Set([...referencedAssetIdsInPrompt(text), ...media.flatMap(item => item.assetId ? [item.assetId] : [])])]
+        const assetReferences = [...new Set([...referencedAssetIdsInPrompt(text), ...attachedMedia.flatMap(item => item.assetId ? [item.assetId] : [])])]
             .map((id) => ({ kind: "asset" as const, id }));
         const generation = imageGeneration.current;
         preparingRef.current = true; setImageBusy(true);
-        void (async () => {
             try {
                 const available = [...references, ...(props.includeAssetLibrary !== false ? buildAssetMentionReferences(assets) : [])];
-                const mediaReferences = [...new Map([...media, ...assistantReferencedMedia(text, attachedIds, available)].map(item => [item.assetId || item.nodeId || item.id, item])).values()];
+                const mediaReferences = [...new Map([...attachedMedia, ...assistantReferencedMedia(text, nodeIds, available)].map(item => [item.assetId || item.nodeId || item.id, item])).values()];
                 if (mediaReferences.length > 8) throw new Error('附件和音视频引用合计最多 8 项，请减少引用或选区');
-                const referenced = await assistantReferenceImages(text, assistant.status?.model?.maxImages ? attachedIds : [], available, assistant.projectId);
+                const referenced = await assistantReferenceImages(text, assistant.status?.model?.maxImages ? nodeIds : [], available, assistant.projectId);
                 const editing = await props.resolveVisualReferences?.(text) || [];
                 assertUserScope(scope);
-                if (generation !== imageGeneration.current) return;
-                const visual = [...images, ...referenced, ...editing];
+                if (generation !== imageGeneration.current) return false;
+                const visual = [...attachedImages, ...referenced, ...editing];
                 if (visual.length > ASSISTANT_IMAGE_LIMIT) throw new Error('附件和引用合计最多 8 张图片，请减少引用或取消部分选区');
                 await mediaActions.resume();
                 assertUserScope(scope);
-                if (generation !== imageGeneration.current) return;
-                followLatestRef.current = true; setDraft(''); setImages([]); setMedia([]); setSelectedSkill(null); preparingRef.current = false; setImageBusy(false);
+                if (generation !== imageGeneration.current) return false;
+                followLatestRef.current = true;
+                if (!queued) { setDraft(''); setImages([]); setMedia([]); setSelectedSkill(null); }
+                preparingRef.current = false; setImageBusy(false);
                 const allAssetReferences = [...new Map([...assetReferences, ...mediaReferences.flatMap(item => item.assetId ? [{ kind: 'asset' as const, id: item.assetId }] : [])].map(item => [item.id, item])).values()];
-                const admitted = await assistant.send(text, attachedIds, allAssetReferences, selectedSkill ?? undefined, visual, mediaReferences);
-                if (admitted === false && generation === imageGeneration.current) { setImages(images); setMedia(media); setDraft(current => current || draft); setSelectedSkill(current => current || selectedSkill); }
-            } catch (error) { message.error(error instanceof Error ? error.message : '读取引用图片失败'); }
+                const admitted = await assistant.send(text, nodeIds, allAssetReferences, requestedSkill, visual, mediaReferences, { onAdmitted: options.onAdmitted });
+                if (admitted === false && !queued && generation === imageGeneration.current) { setImages(images); setMedia(media); setDraft(current => current || draft); setSelectedSkill(current => current || selectedSkill); }
+                return admitted === true;
+            } catch (error) { message.error(error instanceof Error ? error.message : '读取引用图片失败'); return false; }
             finally { if (generation === imageGeneration.current) { preparingRef.current = false; setImageBusy(false); } }
-        })();
-    }, [assistant, attachedIds, draft, readOnly, selectedSkill, images, media, imageBusy, references, assets, props.includeAssetLibrary, props.resolveVisualReferences, scope, message, mediaActions.resume]);
+    }, [assistant, draft, readOnly, selectedSkill, images, media, references, assets, props.includeAssetLibrary, props.resolveVisualReferences, scope, message, mediaActions.resume]);
+    const submitQueued = useCallback((item: QueuedAssistantMessage, onAdmitted: () => void) => dispatchMessage(item.text, item.selectedNodeIds, { queued: true, onAdmitted }), [dispatchMessage]);
+    const queued = useAssistantMessageQueue({ assistant, submit: submitQueued, disabled: readOnly || !assistant.open, busy: imageBusy || Boolean(images.length || media.length || selectedSkill) });
+    pendingUserQueue.current = Boolean(queued.messages.length || queued.busyId);
+    useEffect(() => { mediaActions.notifyUserQueueChanged(); }, [queued.messages.length, queued.busyId, mediaActions.notifyUserQueueChanged]);
+    const [queueSaving, setQueueSaving] = useState(false);
+    const send = useCallback(() => {
+        const text = draft.trim() || (images.length || media.length ? '请分析这些附件。' : '');
+        if (!text || readOnly || assistant.sessionBusy || imageBusy || queueSaving || preparingRef.current) return;
+        if (assistant.streaming || queued.messages.length) {
+            if (selectedSkill || images.length || media.length) { message.info('排队消息支持文字和素材引用；附件与技能请在当前轮结束后发送。'); return; }
+            setQueueSaving(true);
+            void queued.enqueue(text, attachedIds).then(() => setDraft(current => current === draft ? '' : current))
+                .catch(error => message.error(error instanceof Error ? error.message : '排队失败，消息仍保留在输入框'))
+                .finally(() => setQueueSaving(false));
+            return;
+        }
+        if (queued.paused) void queued.resume().then(() => dispatchMessage(text, attachedIds)).catch(error => message.error(error instanceof Error ? error.message : '发送失败'));
+        else void dispatchMessage(text, attachedIds);
+    }, [assistant.streaming, assistant.sessionBusy, queued, queueSaving, draft, images, media, selectedSkill, readOnly, imageBusy, attachedIds, message, dispatchMessage]);
 
     const startResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -293,9 +311,9 @@ export function CanvasAssistantSidebar(props: Props) {
                     <div className="canvas-assistant-turn">
                         <CanvasAssistantUserMessage text={assistant.pendingUserText} selectedCount={assistant.pendingSelectedNodeIds.length} requestedSkill={assistant.pendingRequestedSkill} />
                         {assistant.instructions?.map(item => <p className="canvas-assistant-meta" key={item.instructionId}>补充要求：{item.message} · {item.state === 'received' ? '已交给助手' : item.state === 'queued' ? '等待当前步骤结束' : '尚未处理'}</p>)}
-                        <AssistantToolActivityView items={assistant.toolActivity} live={assistant.streaming} />
-                        {assistant.streamed ? <CanvasAssistantReply text={assistant.streamed} isStreaming={assistant.streaming} /> : null}
-                        {assistant.streaming ? (
+                        <AssistantExecutionProcess execution={assistant.execution} items={assistant.toolActivity} live />
+                        {assistant.streamed && !assistant.execution.some(item => item.kind === 'message') ? <CanvasAssistantReply text={assistant.streamed} isStreaming={assistant.streaming} /> : null}
+                        {assistant.streaming && !assistant.toolActivity.some(item => item.status === 'running') ? (
                             <p className="canvas-assistant-meta canvas-assistant-working" role="status"><WorkingDots dotSize={3} /><span>{assistant.lifecycleNotice || (assistant.streamed ? "助手正在回复…" : "助手正在处理…")}</span></p>
                         ) : null}
                     </div>
@@ -323,10 +341,11 @@ export function CanvasAssistantSidebar(props: Props) {
             {assistant.instructionError ? <p className="canvas-assistant-failed" role="status">{assistant.instructionError}</p> : null}
             {mediaActions.permissionError ? <p className="canvas-assistant-failed" role="status">{mediaActions.permissionError}</p>:null}
             {images.length > 0 && assistant.status?.model?.maxImages === 0 ? <div className="canvas-assistant-notice" role="status"><span>当前助手模型未开启图片输入。</span><Button size="small" onClick={onOpenModelSettings}>配置视觉模型</Button></div> : null}
+            <AssistantMessageQueueView queue={queued} streaming={assistant.streaming} canGuide={assistant.canSupplement} disabled={readOnly} onCheck={() => void assistant.reloadHistory()} />
             <CanvasAssistantComposer
                 permissionMode={mediaActions.mode} permissionBusy={mediaActions.permissionBusy} mediaBusy={mediaActions.pending}
                 onPermissionModeChange={mode=>void mediaActions.changeMode(mode).catch(error=>message.error(error instanceof Error?error.message:'切换权限失败'))}
-                images={images} imageBusy={imageBusy}
+                images={images} imageBusy={imageBusy || queueSaving}
                 media={media} onRemoveMedia={id => setMedia(current => current.filter(item => item.id !== id))}
                 onAddFiles={files => void addFiles(files)}
                 onRemoveImage={id => setImages(current => current.filter(image => image.id !== id))}
@@ -335,9 +354,9 @@ export function CanvasAssistantSidebar(props: Props) {
                 value={draft}
                 onChange={setDraft}
                 onSend={send}
-                onStop={() => void mediaActions.stop().catch(error=>message.error(error instanceof Error?error.message:'停止制作失败'))}
+                onStop={() => { if (queued.loaded) void queued.pause().catch(() => {}); void mediaActions.stop().catch(error=>message.error(error instanceof Error?error.message:'停止制作失败')); }}
                 streaming={assistant.streaming}
-                canSupplement={assistant.canSupplement}
+                canSupplement={Boolean(assistant.sessionId) && queued.loaded && !queueSaving}
                 disabled={composerDisabled}
                 disabledReason={composerReason}
                 references={references}
