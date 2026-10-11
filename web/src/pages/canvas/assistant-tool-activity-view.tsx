@@ -1,21 +1,40 @@
-import { Check, CircleAlert, CircleDashed, LoaderCircle, ChevronRight, FileText, Terminal, Search, Clapperboard } from "lucide-react";
-import { memo } from "react";
+import { LoaderCircle, ChevronRight, FileText, Terminal, Search, Clapperboard } from "lucide-react";
+import { memo, useState } from "react";
 import type { AssistantToolActivity } from "@/services/api/agent-assistant";
 import { toolActivityLabel } from "./assistant-tool-activity";
 
 const statusLabels = { running: "执行中", completed: "已完成", error: "调用失败", interrupted: "结束状态未确认" };
-const icons = { running: LoaderCircle, completed: Check, error: CircleAlert, interrupted: CircleDashed };
+function toolTarget(item: AssistantToolActivity): string {
+    if (!item.detail?.input) return '';
+    try {
+        const input = JSON.parse(item.detail.input);
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
+        const target = [input.command, input.script, input.path, input.file, input.query, input.url, input.candidateId]
+            .find(value => typeof value === 'string' && value.trim());
+        return typeof target === 'string' ? target.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+    } catch { return ''; }
+}
 
-function ToolRow({ item }: { item: AssistantToolActivity }) {
-    const Icon = icons[item.status];
+const ToolRow = memo(function ToolRow({ item }: { item: AssistantToolActivity }) {
+    const [expanded, setExpanded] = useState(false);
+    const Icon = item.status === 'running' ? LoaderCircle : activityIcon(item.tool);
+    const target = toolTarget(item);
     return <li data-tool-status={item.status} className="canvas-assistant-tool-record">
-        <div className="canvas-assistant-tool-record-heading"><Icon size={13} className={item.status === 'running' ? 'canvas-assistant-tool-spinning' : undefined} aria-hidden />
-            <span>{toolActivityLabel(item.tool)}</span><small>{statusLabels[item.status]}</small></div>
+        <details onToggle={event => setExpanded(event.currentTarget.open)}>
+        <summary className="canvas-assistant-tool-record-heading" aria-label={`${toolActivityLabel(item.tool)}${target ? `：${target}` : ''}，${statusLabels[item.status]}`}>
+            <Icon size={13} className={item.status === 'running' ? 'canvas-assistant-tool-spinning' : undefined} aria-hidden />
+            <span><span>{toolActivityLabel(item.tool)}</span>{target ? <span className="canvas-assistant-tool-target" title={target}>{target}</span> : null}</span>
+            {item.status !== 'completed' ? <small>{statusLabels[item.status]}</small> : null}
+            <ChevronRight size={12} className="canvas-assistant-tool-chevron" aria-hidden />
+        </summary>
+        {expanded ? <div className="canvas-assistant-tool-record-body">
         {item.detail?.input ? <div className="canvas-assistant-tool-detail"><span>执行内容</span><pre>{item.detail.input}</pre></div> : null}
         {item.detail?.output ? <div className="canvas-assistant-tool-detail"><span>返回结果</span><pre>{item.detail.output}</pre></div> : null}
         {!item.detail?.input && !item.detail?.output ? <p className="canvas-assistant-meta">{item.status === 'running' ? '等待工具返回结果。' : '这条记录没有保存执行详情。'}</p> : null}
+        </div> : null}
+        </details>
     </li>;
-}
+});
 
 function activityIcon(tool: string) {
     if (/^workspace_(run|install)/.test(tool)) return Terminal;
@@ -38,12 +57,6 @@ function batchLabel(items: AssistantToolActivity[]) {
 
 export const AssistantToolActivityView = memo(function AssistantToolActivityView({ items }: { items: AssistantToolActivity[] }) {
     if (!items.length) return null;
-    const groups: AssistantToolActivity[][] = [];
-    for (const item of items) {
-        const group = groups.at(-1);
-        if (group && toolActivityLabel(group[0].tool) === toolActivityLabel(item.tool)) group.push(item);
-        else groups.push([item]);
-    }
     const current = items.findLast(item => item.status === 'running');
     const Icon = current ? LoaderCircle : activityIcon(items[0].tool);
     return <details className="canvas-assistant-tool-activity" aria-label="工具执行记录">
@@ -53,12 +66,7 @@ export const AssistantToolActivityView = memo(function AssistantToolActivityView
             <ChevronRight size={13} className="canvas-assistant-tool-chevron" aria-hidden />
         </summary>
         <div className="canvas-assistant-tool-records">
-        {groups.map(group => {
-            return <section key={group[0].toolCallId} className="canvas-assistant-tool-group">
-                {group.length > 1 ? <p className="canvas-assistant-meta">{toolActivityLabel(group[0].tool)} · {group.length} 次</p> : null}
-                <ul>{group.map(item => <ToolRow key={item.toolCallId} item={item} />)}</ul>
-            </section>;
-        })}
+            <ul>{items.map(item => <ToolRow key={item.toolCallId} item={item} />)}</ul>
         </div>
     </details>;
 });
