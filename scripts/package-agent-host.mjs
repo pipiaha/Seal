@@ -11,7 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const targets = { 'darwin/arm64': ['darwin', 'arm64'], 'darwin/amd64': ['darwin', 'x64'], 'windows/amd64': ['win32', 'x64'] };
 const runtimeModules = ['session-identity.mjs', 'canvas-turn.mjs', 'request-budget.mjs', 'durable-request-budget.mjs',
   'operation-bridge.mjs', 'edit-bridge.mjs', 'hypit-bridge.mjs', 'hyperframes-bridge.mjs', 'creator-bridge.mjs', 'workflow-journal.mjs', 'hypit-distribution.mjs', 'session-owner.mjs', 'full-control-loader.mjs',
-  'session-settings.mjs', 'lifecycle-events.mjs', 'skill-read-bridge.mjs', 'turn-context.mjs', 'turn-instructions.mjs', 'visual-input.mjs'];
+  'session-settings.mjs', 'lifecycle-events.mjs', 'tool-display.mjs', 'output-policy.mjs', 'skill-read-bridge.mjs', 'turn-context.mjs', 'turn-instructions.mjs', 'visual-input.mjs'];
 const sourceFiles = ['server.mjs', ...runtimeModules, 'package.json', 'bun.lock'];
 
 function run(command, args, cwd) {

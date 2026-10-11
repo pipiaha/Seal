@@ -13,6 +13,9 @@ func ConfiguredProvider(provider ManifestProvider, capability Capability) (Adapt
 	if capability != CapabilityImage && capability != CapabilityVideo {
 		return nil, fmt.Errorf("自定义接口仅支持图片和视频")
 	}
+	if strings.TrimSpace(provider.Script) != "" {
+		return newScriptAdapter(provider, capability)
+	}
 	provider.ID = "custom-" + string(capability)
 	provider.Label = "自定义" + string(capability)
 	provider.Capabilities = []Capability{capability}

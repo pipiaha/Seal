@@ -18,43 +18,60 @@ test("custom service exposes its interface before adding models and preserves ea
     try {
         const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
         const errors: string[] = [];
+        const previewed: string[] = [];
         page.on("pageerror", error => errors.push(error.message));
         await page.route("**/*", async route => {
             const path = new URL(route.request().url()).pathname;
             if (path === "/harness.js") await route.fulfill({ contentType: "application/javascript", body: javascript });
+            else if (path === "/api/workspace/providers/script/preview") {
+                const input = route.request().postDataJSON() as { script: string };
+                previewed.push(input.script);
+                await route.fulfill({ contentType: "application/json", body: JSON.stringify({ code: 0, data: { valid: true, create: { method: "POST", path: "/jobs", body: { params: ["fixture"] } } } }) });
+            }
             else if (path.startsWith("/api/")) await route.fulfill({ contentType: "application/json", body: JSON.stringify({ code: 0, data: { providers: [] } }) });
             else await route.fulfill({ contentType: "text/html", body: '<div id="root"></div><script type="module" src="/harness.js"></script>' });
         });
         await page.goto("http://seal-fixture.local/");
-        await page.getByRole("textbox", { name: "提交路径", exact: true }).waitFor();
+        await page.locator(".cm-content").waitFor();
         expect(await page.getByRole("button", { name: "高级设置", exact: true }).count()).toBe(1);
-        expect(await page.getByRole("textbox", { name: "提交路径", exact: true }).count()).toBe(1);
+        expect(await page.locator(".cm-content").count()).toBe(1);
         await page.getByRole("button", { name: "高级设置", exact: true }).click();
-        expect(await page.getByRole("textbox", { name: "提交路径", exact: true }).count()).toBe(0);
+        expect(await page.locator(".cm-content").count()).toBe(0);
         await page.getByRole("button", { name: "高级设置", exact: true }).click();
-        expect(await page.getByRole("textbox", { name: "提交路径", exact: true }).inputValue()).toBe("/videos");
-        await page.getByRole("textbox", { name: "提交路径", exact: true }).fill("/jobs");
+        const firstScript = '{create:{method:"POST",path:"/jobs",body:{params:[prompt,...images]}},poll:{method:"GET",path:"/jobs/{task_id}"},response:{taskId:"id",status:"status",result:"url"}}';
+        const secondScript = firstScript.replace('path:"/jobs"', 'path:"/jobs/v2"');
+        const writeScript = async (source: string) => {
+            await page.locator(".cm-content").click();
+            await page.keyboard.press("Control+A");
+            await page.keyboard.insertText(source);
+        };
+        expect(await page.locator(".cm-content").innerText()).toContain("/videos");
+        await writeScript(firstScript);
+        await page.getByRole("button", { name: "检查并预览请求", exact: true }).click();
+        await page.locator('[aria-label="接口请求预览"]').waitFor();
+        expect(await page.locator('[aria-label="接口请求预览"]').innerText()).toContain('"params"');
         await page.getByRole("textbox", { name: "模型 ID", exact: true }).fill("first-video");
         await page.locator(".model-service-manual button").click();
-        expect(await page.getByRole("textbox", { name: "提交路径", exact: true }).inputValue()).toBe("/jobs");
+        expect(await page.locator(".cm-content").innerText()).toContain('path:"/jobs"');
         await page.getByRole("button", { name: "生成参数与连接测试", exact: true }).click();
         await page.getByRole("tab", { name: "能力与参数", exact: true }).waitFor();
         expect(await page.getByRole("tab", { name: "基本信息", exact: true }).count()).toBe(0);
-        expect(await page.getByRole("textbox", { name: "提交路径", exact: true }).count()).toBe(1);
+        expect(await page.locator(".cm-content").count()).toBe(1);
         await page.getByRole("button", { name: /完\s*成/ }).click();
         await page.getByRole("textbox", { name: "模型 ID", exact: true }).fill("second-video");
         await page.locator(".model-service-manual button").click();
-        await page.getByRole("textbox", { name: "提交路径", exact: true }).fill("/jobs/v2");
+        await writeScript(secondScript);
         await page.getByRole("textbox", { name: "渠道名称", exact: true }).fill("Fixture service");
         await page.getByRole("textbox", { name: "服务地址", exact: true }).fill("https://example.com/v1");
         await page.locator('input[aria-label="API Key"]').fill("fixture-not-a-real-key");
         await page.locator(".model-service-footer button").last().click();
         await page.waitForFunction(() => Boolean((window as unknown as { savedChannel?: unknown }).savedChannel));
-        const saved = await page.evaluate(() => (window as unknown as { savedChannel: { modelProfiles: Array<{ model: string; protocol: string; customProvider: { create: { path: string } } }> } }).savedChannel);
-        expect(saved.modelProfiles.map(profile => [profile.model, profile.protocol, profile.customProvider.create.path])).toEqual([
-            ["first-video", "custom-video", "/jobs"],
-            ["second-video", "custom-video", "/jobs/v2"],
+        const saved = await page.evaluate(() => (window as unknown as { savedChannel: { modelProfiles: Array<{ model: string; protocol: string; customProvider: { script: string } }> } }).savedChannel);
+        expect(saved.modelProfiles.map(profile => [profile.model, profile.protocol, profile.customProvider.script])).toEqual([
+            ["first-video", "custom-video", firstScript],
+            ["second-video", "custom-video", secondScript],
         ]);
+        expect(previewed).toEqual([firstScript, firstScript, secondScript]);
         expect(errors).toEqual([]);
     } finally {
         await browser.close();

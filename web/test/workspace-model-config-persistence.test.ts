@@ -153,6 +153,49 @@ test("model config repository refreshes revision after conflict and retries the 
     expect(repository.getState()).toMatchObject({ status: "saved", revision: 8, dirty: false });
 });
 
+test("assistant channel edits merge with pending UI changes without resaving stale channels", async () => {
+    const channel = createModelChannel({ id: "custom", baseUrl: "https://example.com/v1", models: ["image"], modelProfiles: [{ model: "image", capability: "image", protocol: "custom-image", customProvider: { auth: { type: "bearer" }, create: { method: "POST", path: "/old" }, response: { resultUrlPaths: ["url"] }, script: "old" } }] });
+    const base = { ...defaultConfig, channels: [channel] };
+    const remote = structuredClone(base);
+    remote.channels[0].modelProfiles![0].customProvider!.script = "updated by assistant";
+    let reads = 0; const writes: AiConfig[] = [];
+    const repository = createModelConfigRepository({
+        read: async () => ({ config: reads++ === 0 ? base : remote, revision: reads === 1 ? 1 : 2, health: "ready", source: "builtin+local" }),
+        write: async (config, revision) => { if (revision === 1) throw Object.assign(new Error("conflict"), { status: 409 }); writes.push(config); return { saved: true, revision: 3 }; },
+    });
+    await repository.hydrate();
+    repository.subscribeRemote(config => { void repository.commit(config); });
+    await repository.commit({ ...base, videoModel: "new UI selection" });
+    expect(writes).toHaveLength(1);
+    expect(writes[0].videoModel).toBe("new UI selection");
+    expect(writes[0].channels[0].modelProfiles![0].customProvider!.script).toBe("updated by assistant");
+    expect(repository.getState().dirty).toBe(false);
+});
+
+test("remote refresh applies assistant-added channels without writing them back", async () => {
+    let remote = { ...defaultConfig }; let revision = 1; let writes = 0; let applied: AiConfig | undefined;
+    const repository = createModelConfigRepository({ read: async () => ({ config: remote, revision, health: "ready", source: "builtin+local" }), write: async () => { writes++; return { saved: true, revision: revision + 1 }; } });
+    await repository.hydrate();
+    repository.subscribeRemote(config => { applied = config; void repository.commit(config); });
+    remote = { ...defaultConfig, channels: [createModelChannel({ id: "agent-new", models: ["image"] })] }; revision = 2;
+    expect(await repository.refresh()).toBe(true);
+    expect(applied?.channels[0].id).toBe("agent-new"); expect(writes).toBe(0);
+    expect(repository.getState()).toMatchObject({ revision: 2, dirty: false });
+});
+
+test("conflicting edits of the same setting never overwrite the remote snapshot", async () => {
+    let reads = 0; const writes: number[] = [];
+    const repository = createModelConfigRepository({
+        read: async () => ({ config: reads++ === 0 ? defaultConfig : { ...defaultConfig, videoModel: "assistant choice" }, revision: reads === 1 ? 1 : 2, health: "ready", source: "builtin+local" }),
+        write: async (_config, revision) => { writes.push(revision); throw Object.assign(new Error("conflict"), { status: 409 }); },
+    });
+    await repository.hydrate();
+    await repository.commit({ ...defaultConfig, videoModel: "local choice" });
+    expect(writes).toEqual([1]);
+    expect(repository.getState()).toMatchObject({ status: "error", dirty: true, revision: 1 });
+    expect(repository.getState().error).toContain("同一项");
+});
+
 test("catalog refresh keeps pending manual provider edits across delayed read and write", async () => {
     const writes: AiConfig[] = [];
     let releaseFirstWrite: (() => void) | undefined;

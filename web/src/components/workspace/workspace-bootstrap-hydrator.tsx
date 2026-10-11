@@ -7,7 +7,7 @@ import { appPathname } from "@/lib/app-routing";
 import { preloadWorkspaceRoute } from "@/lib/workspace-route-modules";
 import { applyUserSession, localWorkspaceConfig } from "@/lib/user-session";
 import { getWorkspaceBootstrap, type WorkspaceBootstrapPayload } from "@/services/api/workspace";
-import { commitModelConfig, flushModelConfig, hydrateModelConfig } from "@/services/model-config-repository";
+import { commitModelConfig, flushModelConfig, hydrateModelConfig, refreshModelConfig, subscribeRemoteModelConfig } from "@/services/model-config-repository";
 import { normalizeConfigSnapshot, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -51,18 +51,25 @@ export function WorkspaceBootstrapHydrator({ children }: { children: ReactNode }
 
     useEffect(() => {
         let ready = false;
+        const unsubscribeRemote = subscribeRemoteModelConfig(config => {
+            useConfigStore.getState().replaceConfig(localWorkspaceConfig(normalizeConfigSnapshot({ config }).config));
+        });
         const unsubscribe = useConfigStore.subscribe((state) => {
             if (!shouldSaveLocalModelConfig({ subscriptionReady: ready, modelConfigReady: modelConfigReady.current, channelCount: state.config.channels.length })) return;
             void commitModelConfig(state.config);
         });
         const flush = () => { void flushModelConfig(); };
         window.addEventListener("pagehide", flush);
+        const refresh = () => { if (modelConfigReady.current) void refreshModelConfig().catch(() => {}); };
+        window.addEventListener("focus", refresh);
         const markReady = () => { ready = true; };
         if (modelConfigReady.current) markReady();
         else window.setTimeout(markReady, 0);
         return () => {
             unsubscribe();
+            unsubscribeRemote();
             window.removeEventListener("pagehide", flush);
+            window.removeEventListener("focus", refresh);
             void flushModelConfig();
         };
     }, []);

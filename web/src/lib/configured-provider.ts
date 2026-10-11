@@ -1,8 +1,10 @@
 import type { ModelProtocolDefinition } from "./model-protocols";
 import type { ModelChannel, WorkflowFieldMapping } from "@/stores/use-config-store";
+import { defaultProviderScript } from "./provider-script";
 
 export type ProviderOperation = { method: string; path: string; originPath?: boolean; contentType?: string; body?: unknown; query?: Record<string, unknown>; fields?: Record<string, string>; files?: Array<{ name: string; source: unknown }> };
 export type CustomProvider = {
+    script?: string;
     auth: { type: "none" | "bearer" | "header"; header?: string; field?: string };
     requiresPublicMediaUrls?: boolean;
     create: ProviderOperation;
@@ -15,12 +17,13 @@ export type ComfyWorkflow = { graph: Record<string, unknown>; fields: WorkflowFi
 export type GenerationModelProfile = NonNullable<ModelChannel["modelProfiles"]>[number];
 
 export const CONFIGURED_PROTOCOLS: ModelProtocolDefinition[] = (["image", "video"] as const).flatMap(capability => [
-    { value: `custom-${capability}`, label: "自定义 HTTP 接口", vendor: "自定义", capability, create: "按模型配置提交", poll: "按模型配置查询", contentType: "application/json / multipart/form-data", media: "字段映射", enabled: true },
+    { value: `custom-${capability}`, label: "自定义 HTTP 接口", vendor: "自定义", capability, create: "按模型配置提交", poll: "按模型配置查询", contentType: "application/json / multipart/form-data", media: "JavaScript 参数转换", enabled: true },
     { value: `comfyui-${capability}`, label: "本地 ComfyUI 工作流", vendor: "ComfyUI", capability, create: "POST /prompt", poll: "GET /history/{task_id}", contentType: "application/json", media: "本地工作流", enabled: true },
 ]);
 
 export function defaultCustomProvider(capability: "image" | "video"): CustomProvider {
     return {
+        script: defaultProviderScript(capability),
         auth: { type: "bearer", field: "apiKey" },
         create: { method: "POST", path: capability === "video" ? "/videos" : "/images/generations", contentType: "application/json", fields: { model: "request.model", prompt: "request.prompt", ...(capability === "video" ? { seconds: "request.duration" } : {}) } },
         ...(capability === "video" ? { poll: { method: "GET", path: "/videos/{task_id}" } } : {}),
@@ -32,6 +35,11 @@ export function configuredProfileError(profile: GenerationModelProfile): string 
     if (profile.protocol?.startsWith("custom-")) {
         const provider = profile.customProvider;
         if (!provider) return "请配置自定义接口";
+        if (typeof provider.script === "string") {
+            if (!provider.script.trim()) return "请填写 JavaScript 接口配置";
+            if (new TextEncoder().encode(provider.script).byteLength > 64 * 1024) return "接口脚本不能超过 64 KB";
+            return "";
+        }
         for (const op of [provider.create, provider.poll, provider.cancel, provider.result]) {
             if (op && (!op.path.startsWith("/") || op.path.startsWith("//") || /[\r\n]/.test(op.path))) return "接口路径需以 / 开头，不能填写另一台服务的地址";
         }

@@ -16,6 +16,7 @@ import { ConfiguredProviderEditor } from "./configured-provider-editor";
 import "./model-service-editor.css";
 import { configuredProfileError, defaultCustomProvider, type GenerationModelProfile } from "@/lib/configured-provider";
 import { defaultModelCapabilityConfig } from "@/lib/model-capabilities";
+import { previewProviderScript, providerScriptSample } from "@/services/api/configured-provider";
 
 const labels: Record<ModelCapability, string> = { text: "文字", image: "图片", video: "视频", audio: "配音" };
 
@@ -128,6 +129,17 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
         for (const profile of profiles) { const problem = configuredProfileError(profile); if (problem) { setError(`${profile.model}：${problem}`); showModelSettings(profile.model); return; } }
         setBusy(true); setError("");
         try {
+            for (const profile of profiles) {
+                if (profile.protocol?.startsWith("custom-") && profile.customProvider?.script && (profile.capability === "image" || profile.capability === "video")) {
+                    try {
+                        const checked = await previewProviderScript(profile.customProvider.script, providerScriptSample(profile.capability, profile.model));
+                        if (checked.valid !== true) throw new Error("运行端未确认脚本有效");
+                    } catch (failure) {
+                        showModelSettings(profile.model);
+                        throw new Error(`${profile.model}：${failure instanceof Error ? failure.message : "接口脚本检查失败"}`);
+                    }
+                }
+            }
             await onSave({ ...draft, name: draft.name.trim(), baseUrl: draft.baseUrl.trim().replace(/\/+$/, ""), apiKey: draft.apiKey.trim(), modelProfiles: mergeCategoryModelProfiles(draft, profiles) });
             onClose();
         } catch (failure) { setError(failure instanceof Error ? failure.message : "保存失败，请重试"); }
@@ -163,6 +175,7 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
                     <Form.Item label="渠道名称"><Input aria-label="渠道名称" placeholder={`例如：我的${labels[capability]}渠道`} value={draft.name} onChange={(event) => patch({ name: event.target.value })} /></Form.Item>
                     {nativeSpeech && <Form.Item label="接口类型"><Input aria-label="语音接口类型" readOnly value={presetId === "doubao-tts" ? "豆包原生语音 · HTTP SSE" : "讯飞在线合成 · WebSocket"} /></Form.Item>}
                 </div>
+                {selectedPreset.connections && <Form.Item label="服务站点" extra="选择创建 API Key 的站点；国内站与国际站的密钥不应混用。"><Select aria-label="服务站点" placeholder="按供应商提供的地址选择" value={selectedPreset.connections.find(connection => connection.value === draft.baseUrl.replace(/\/$/, ""))?.value} options={selectedPreset.connections} onChange={baseUrl => patch({ baseUrl })} /></Form.Item>}
                 <Form.Item label="服务地址"><Input aria-label="服务地址" inputMode="url" placeholder="https://api.example.com/v1" value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} /></Form.Item>
                 <Form.Item label="鉴权方式"><Select aria-label="鉴权方式" value={draft.authType || "bearer"} options={[{ value: "bearer", label: "API Key / Bearer" }, { value: "header", label: "指定请求头" }, { value: "none", label: "无需鉴权（本地服务）" }]} onChange={authType => patch({ authType })} /></Form.Item>
                 {draft.authType === "header" && <Form.Item label="鉴权请求头名称"><Input aria-label="鉴权请求头名称" placeholder="X-API-Key" value={draft.authHeader || ""} onChange={event => patch({ authHeader: event.target.value })} /></Form.Item>}

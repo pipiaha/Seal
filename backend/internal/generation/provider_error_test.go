@@ -13,6 +13,22 @@ import (
 	"infinite-canvas/backend/internal/generation"
 )
 
+func TestChannelSlotClassificationKeepsAcceptedTaskAndDistinguishesConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		code     string
+		category generation.FailureCategory
+	}{
+		{"channel_concurrency_unavailable", generation.CategoryLocalConfig},
+		{"channel_concurrency_wait_timeout", generation.CategoryConcurrency},
+		{"channel_concurrency_wait_cancelled", generation.CategoryCancelled},
+	} {
+		failure := generation.WithChannelSlotFailure(generation.Failure{Uncertain: true, TaskID: "accepted-task-1", RequestID: "request-1"}, tc.code)
+		if failure.Category != tc.category || !failure.Uncertain || failure.Retryable || failure.TaskID != "accepted-task-1" || failure.RequestID != "request-1" {
+			t.Fatalf("slot classification lost existing receipt state: %+v", failure)
+		}
+	}
+}
+
 func TestOutboundPolicyErrorsHaveActionableCopyAndDiagnostics(t *testing.T) {
 	for _, message := range []string{
 		"不允许访问本机或内网地址", "不允许访问本机、内网或链路本地地址",

@@ -67,6 +67,11 @@ func newPlatformHost(service *Service) platformHost {
 		requireAdmin: service.RequireAdmin,
 		appendAudit:  service.appendAdminAudit,
 		channelConcurrencyLimit: func(channelID string) (int, error) {
+			// Desktop channels live in the local provider snapshot, not system channels.
+			// Keep the channel scope and use the local runtime's concurrency policy.
+			if service.IsLocalMode() {
+				return 0, nil
+			}
 			channel, err := service.repo.SystemChannel(channelID)
 			if err != nil {
 				return 0, err

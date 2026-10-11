@@ -33,6 +33,7 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 | --- | --- |
 | `/workspace/*` | 本地工作区启动和模型配置 |
 | `/workspace/providers/comfyui/inspect` | 只读检查用户配置的本地 ComfyUI 服务与节点，不提交生成 |
+| `/workspace/providers/script/preview` | 只运行自定义图片／视频接口的 JavaScript 参数转换与响应提取，不访问供应商 |
 | `/call-logs` | 当前工作区的媒体调用列表，按任务归组；支持类型、渠道、状态、任务和关键词筛选 |
 | `/call-logs/:id` | 任务请求过程，每页 30 条；不含正文 |
 | `/call-logs/:id/requests/:requestId` | 同一任务的一次请求，含脱敏的完整 URL、参数、响应、HTTP 状态和耗时 |
@@ -53,6 +54,12 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 `POST /timeline/render-plan` 接收时间线快照、不透明源标识和输出选项，返回版本化语义计划。源标识是 nodeId 或 resource id，不是本地路径。请求不得携带 ffmpeg 参数。该接口不做生成、不写资源、不创建任务。
 
 `POST /workspace/providers/comfyui/inspect` 仅限本地工作区，最多接收 64 KiB JSON：`baseUrl`、`authType`（none/bearer/header）、`apiKey`、`authHeader`、`headers`。返回信封中的 `data.stats` 与 `data.nodes`，分别来自 `/system_stats`、`/object_info`。请求允许连接配置中的回环服务，不允许跨服务重定向；不执行 `/prompt`，不安装节点。完整使用合同见[自定义图片、视频接口与本地 ComfyUI](../models/custom-media-providers)。
+
+`POST /workspace/providers/script/preview` 仅限本地工作区，接收 `script`、统一生成输入 `request`（capability 为 image/video）和可选的供应商响应 JSON `response`。最多 256 KiB 请求体、64 KiB 源码；每次转换限时 200 毫秒。返回 `data.valid`、`create` 及配置中的 `poll/cancel/result` 请求描述；传入响应时附带 `parsedResponse`。不提供真实渠道密钥，不请求供应商或提交任务。保存接口时复用此检查；实际执行仍走生成任务执行器。
+
+助手渠道工具使用 `POST /assistant/projects/:projectId/providers/read|preview|save`，沿用可信桌面身份或拥有当前工程的开放助手轮次校验。`read` 返回当前配置 revision、用户渠道及不含密钥／请求头值的模型摘要。`preview` 接收 `capability/model/script`，可附 `request/response` 示例，复用同一转换引擎，不请求供应商。
+
+`save` 接收 `operationId`（宿主注入的 64 位十六进制标识）、`expectedRevision`、`capability`（image/video）、`model`、`script`。已有渠道携带 `channelId`；新建省略 `channelId`，提供 `name/baseUrl`（HTTPS）及可选 `authType/authHeader`。`setDefault` 默认 false。可选 apiKey 接收用户主动提供的密钥，非空时替换，省略或留空保留原值；只变更一个模型接口并保留其他模型；不能修改文字模型、内置／托管渠道或已有服务地址与鉴权。API Key 写入现有加密配置且不在响应中返回；请求头值、Secret Key 等不支持的入参直接拒绝。配置冲突为 409；重放相同提交不重复创建。返回 `saved/revision/channelId/model/needsCredential/replayed/generated`，其中 `generated` 为 false。读取或修改需要真实工程归属，关闭轮次后拒绝宿主访问。
 
 `POST /timeline/renders` 接收同一套时间线快照和输出选项（宽高、帧率、采样率、是否烧录字幕），创建本机 ffmpeg 成片任务。选项进入任务输入并在执行时编译进语义计划。
 
@@ -297,6 +304,8 @@ NewAPI Channel 2 与 BeefAPI 视频的暂时下载断连会保留原任务 ID �
 诊断字段在本地 schema v3 中以可空文本列保存，旧任务不补写原始错误，重试会清除上一轮诊断。任务列表、详情和画布的“复制排查信息”使用同一份诊断；复制内容不包含请求正文、提示词、凭据、素材 URL 或本地文件路径。`providerRequestId` 可能是供应商任务标识，在复制内容中标作“服务端关联 ID”，与 HTTP 请求 ID 分开。
 
 `failureDiagnostics` 同时保留本轮执行证据：运行版本和平台、任务配置中的模型/尺寸/质量/数量、提示词长度、参考素材数量与图片大小、本地参考图限制，以及最多 8 次请求（首次及最近 7 次，省略数量另计）的发起状态、HTTP 状态、请求 ID、开始时间、耗时和字节数。任务配置不等于最终出站参数；协议可能转换或省略字段，核对实际发送值须凭请求 ID 关联请求日志。HTTP 200 仅表示收到响应；`executionResult=completed` 才表示生成处理完成。转后台回查时状态为 `pending`，同一次任务继续累积有界轨迹并保留首次请求。成功任务也保存这些证据，以便区分后续本地保存失败或画布应用失败（复制内容来源为 `client_result`）。请求轨迹覆盖统一 Provider HTTP 客户端；旧记录、未经过该客户端的插件请求或上游未提供的 ID 仍可能缺失，不能仅凭空轨迹推断未发送。
+
+渠道并发配置读取失败使用 `errorCode=local_config`，不提示“同时进行的生成过多”，也不自动重试；只有等待并发槽位超时或上游明确并发超限才使用 `concurrency`。桌面自定义渠道按本地运行策略分配槽位，不要求存在系统渠道数据库记录。
 
 ## 剪辑工程与统一资产库
 

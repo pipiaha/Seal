@@ -4,7 +4,7 @@ import { defaultModelCapabilityConfig } from "@/lib/model-capabilities";
 import { inferProtocolCapabilityFromModel, type ModelProtocolDefinition } from "@/lib/model-protocols";
 import { catalogEndpointCapability, type ChannelModelCatalogItem } from "@/lib/channel-model-catalog";
 
-type ServicePreset = { id: string; name: string; subtitle: string; icon: string; baseUrl: string; apiFormat: ApiCallFormat; protocols: Partial<Record<ModelCapability, string>>; urls?: Partial<Record<ModelCapability, string>>; manualCatalog?: ModelCapability[]; audioModel?: string };
+type ServicePreset = { id: string; name: string; subtitle: string; icon: string; baseUrl: string; apiFormat: ApiCallFormat; protocols: Partial<Record<ModelCapability, string>>; urls?: Partial<Record<ModelCapability, string>>; connections?: { label: string; value: string }[]; manualCatalog?: ModelCapability[]; audioModel?: string };
 export const MODEL_SERVICE_PRESETS: ServicePreset[] = [
     { id: "compatible", name: "自定义服务", subtitle: "自有 API 或中转服务", icon: "OpenAI", baseUrl: "", apiFormat: "openai", protocols: { text: "chat-completion", image: "openai-image", audio: "openai-audio" } },
     { id: "openai", name: "OpenAI", subtitle: "GPT · GPT Image · 配音", icon: "OpenAI", baseUrl: "https://api.openai.com/v1", apiFormat: "openai", protocols: { text: "openai-response", image: "openai-image", audio: "openai-audio" } },
@@ -18,7 +18,7 @@ export const MODEL_SERVICE_PRESETS: ServicePreset[] = [
     { id: "ark", name: "火山方舟", subtitle: "豆包 · Seedream · Seedance", icon: "Volcengine", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", apiFormat: "openai", protocols: { text: "chat-completion", image: "volcengine-ark-image", video: "volcengine-ark-video" } },
     { id: "kling", name: "可灵", subtitle: "Kling 视频", icon: "Kling", baseUrl: "https://api.klingai.com", apiFormat: "openai", protocols: { video: "kling-video" }, manualCatalog: ["video"] },
     { id: "vidu", name: "Vidu", subtitle: "Vidu 视频", icon: "Vidu", baseUrl: "https://api.vidu.com", apiFormat: "openai", protocols: { video: "vidu-video" }, manualCatalog: ["video"] },
-    { id: "agnes", name: "Agnes AI", subtitle: "Agnes Image · Agnes Video", icon: "AgnesAI", baseUrl: "https://apihub.agnes-ai.com/v1", apiFormat: "openai", protocols: { image: "agnes-image", video: "agnes-video" }, manualCatalog: ["image", "video"] },
+    { id: "agnes", name: "Agnes AI", subtitle: "Agnes Image · Agnes Video", icon: "AgnesAI", baseUrl: "https://api.agnes-ai.cn/v1", apiFormat: "openai", protocols: { image: "agnes-image", video: "agnes-video" }, connections: [{ label: "国内站 · agnes-ai.cn", value: "https://api.agnes-ai.cn/v1" }, { label: "国际站 · agnes-ai.com", value: "https://apihub.agnes-ai.com/v1" }], manualCatalog: ["image", "video"] },
     { id: "comfyui", name: "本地 ComfyUI", subtitle: "连接本机工作流", icon: "ComfyUI", baseUrl: "http://127.0.0.1:8188", apiFormat: "openai", protocols: { image: "comfyui-image", video: "comfyui-video" }, manualCatalog: ["image", "video"] },
     { id: "doubao-tts", name: "豆包语音合成", subtitle: "火山引擎语音 · TTS 2.0", icon: "Volcengine", baseUrl: "https://openspeech.bytedance.com", apiFormat: "openai", protocols: { audio: "doubao-tts" }, manualCatalog: ["audio"], audioModel: "seed-tts-2.0" },
     { id: "xfyun-tts", name: "科大讯飞", subtitle: "在线语音合成（流式版）", icon: "Spark", baseUrl: "https://tts-api.xfyun.cn", apiFormat: "openai", protocols: { audio: "xfyun-tts" }, manualCatalog: ["audio"], audioModel: "xfyun-tts" },
@@ -40,7 +40,7 @@ export function servicePresetFor(channel: ModelChannel): ModelServicePresetId {
         const host = new URL(channel.baseUrl).hostname;
         if (channel.modelProfiles?.some(profile => profile.protocol?.startsWith("comfyui-"))) return "comfyui";
         if (/^ark\.[a-z0-9-]+\.volces\.com$/.test(host)) return "ark";
-        const preset = MODEL_SERVICE_PRESETS.find((item) => item.baseUrl && new URL(item.baseUrl).hostname === host);
+        const preset = MODEL_SERVICE_PRESETS.find((item) => [item.baseUrl, ...(item.connections?.map(connection => connection.value) || [])].some(url => url && new URL(url).hostname === host));
         if (preset) return preset.id;
     } catch { /* An unfinished connection has no provider identity yet. */ }
     return "compatible";

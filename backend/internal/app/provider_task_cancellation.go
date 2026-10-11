@@ -80,7 +80,7 @@ func (s *Service) requestProviderCancellation(ctx context.Context, task *model.T
 	if err != nil {
 		return s.markProviderCancellationUncertain(task, providerCancellationUncertainMessage("读取上游取消配置失败")+"："+err.Error())
 	}
-	if !supportsProviderCancellation(input.Config.InterfaceType) && !(input.Config.CustomProvider != nil && input.Config.CustomProvider.Cancel != nil && strings.HasPrefix(input.Config.InterfaceType, "custom-")) {
+	if !supportsProviderCancellation(input.Config.InterfaceType) && !(input.Config.CustomProvider != nil && (input.Config.CustomProvider.Cancel != nil || input.Config.CustomProvider.Script != "") && strings.HasPrefix(input.Config.InterfaceType, "custom-")) {
 		return s.markProviderCancellationUncertain(task, providerCancellationUncertainMessage("当前上游协议不支持取消"))
 	}
 

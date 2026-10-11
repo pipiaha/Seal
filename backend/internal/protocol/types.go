@@ -310,6 +310,7 @@ type ManifestContributions struct {
 }
 
 type ManifestProvider struct {
+	Script                  string                 `json:"script,omitempty"`
 	ID                      string                 `json:"id"`
 	Label                   string                 `json:"label"`
 	Capabilities            []Capability           `json:"capabilities"`

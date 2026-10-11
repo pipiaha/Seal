@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { scopedLocalStorage } from "@/lib/user-scope";
 import { captureUserScope, userScopeMatches } from "@/lib/user-scope-guard";
 import { loadAssetsForUse } from "@/services/local-workspace-sync";
-import { flushModelConfig, getModelConfigPersistenceState } from "@/services/model-config-repository";
+import { flushModelConfig, getModelConfigPersistenceState, refreshModelConfig } from "@/services/model-config-repository";
 import { workspaceCapabilities } from "@/services/workspace-mode";
 import {
     activateAssistantSession,
@@ -382,6 +382,12 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                     rerenderIfActive(targetCanvas);
                 },
                 onTool: (event) => {
+                    if (event.tool === "provider_channel_save" && event.phase === "end" && !event.isError) {
+                        void refreshModelConfig().catch(() => {
+                            runFor(targetCanvas).error = "渠道已保存，但配置列表未刷新，请重新打开软件读取。";
+                            rerenderIfActive(targetCanvas);
+                        });
+                    }
                     const current = runFor(targetCanvas);
                     current.lifecycleNotice = null;
                     current.execution = appendExecutionTool(current.execution, event.toolCallId);
@@ -459,6 +465,10 @@ export function useCanvasAssistant({ canvasId, onCanvasChanged, getWorkspaceCont
                             rerenderIfActive(targetCanvas);
                         });
                     }
+                    if ((end.toolCalls || []).some(call => call.tool === "provider_channel_save" && !call.isError)) void refreshModelConfig().catch(() => {
+                        runFor(targetCanvas).error = "渠道已保存，但配置列表未刷新，请重新打开软件读取。";
+                        rerenderIfActive(targetCanvas);
+                    });
                     rerenderIfActive(targetCanvas);
                 },
             }, { signal: controller.signal, selectedNodeIds: selectedSnapshot, references: referenceSnapshot, sessionId: run.sessionId ?? undefined, workspaceContext, selectedSkillId: skillSelection?.id, images, media,continuationProposalId:options.continuationProposalId });

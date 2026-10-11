@@ -1,5 +1,6 @@
 import { getLocalModelConfig, saveLocalModelConfig, type LocalModelConfigPayload } from "@/services/api/workspace";
 import type { AiConfig } from "@/stores/use-config-store";
+import { mergeConcurrentModelConfig } from "@/lib/model-config-merge";
 
 export type ModelConfigPersistenceState = {
     status: "idle" | "hydrating" | "saving" | "saved" | "error";
@@ -17,6 +18,13 @@ export function createModelConfigRepository(dependencies: ModelConfigRepositoryD
     let state: ModelConfigPersistenceState = { status: "idle", revision: 0, dirty: false, error: "" };
     let hydrated = false;
     let latestConfig: AiConfig | null = null;
+    let baseConfig: AiConfig | null = null;
+    let applyingRemote = false;
+    const remoteListeners = new Set<(config: AiConfig) => void>();
+    const applyRemote = (config: AiConfig) => {
+        applyingRemote = true;
+        try { remoteListeners.forEach(listener => listener(config)); } finally { applyingRemote = false; }
+    };
     let generation = 0;
     let drainPromise: Promise<void> | null = null;
     let resolveHydration: (() => void) | null = null;
@@ -34,6 +42,7 @@ export function createModelConfigRepository(dependencies: ModelConfigRepositoryD
         publish({ status: "hydrating", error: "" });
         try {
             const result = await dependencies.read();
+            baseConfig = structuredClone(result.config);
             state = { status: "idle", revision: result.revision, dirty: Boolean(latestConfig), error: "" };
             return result;
         } catch (error) {
@@ -54,14 +63,19 @@ export function createModelConfigRepository(dependencies: ModelConfigRepositoryD
             publish({ status: "saving", error: "" });
             try {
                 const result = await dependencies.write(config, state.revision);
+                baseConfig = structuredClone(config);
                 state = { status: "saved", revision: result.revision, dirty: generation !== savingGeneration, error: "" };
             } catch (error) {
                 if (isRevisionConflict(error)) {
                     try {
                         const current = await dependencies.read();
+                        const merged = mergeConcurrentModelConfig(baseConfig || config, config, current.config);
                         state = { ...state, revision: current.revision, status: "saving", dirty: true, error: "" };
-                        const retried = await dependencies.write(config, state.revision);
+                        const retried = await dependencies.write(merged, state.revision);
+                        latestConfig = generation === savingGeneration ? merged : mergeConcurrentModelConfig(config, latestConfig!, merged);
+                        baseConfig = structuredClone(merged);
                         state = { status: "saved", revision: retried.revision, dirty: generation !== savingGeneration, error: "" };
+                        applyRemote(latestConfig);
                         continue;
                     } catch (retryError) {
                         error = retryError;
@@ -85,6 +99,7 @@ export function createModelConfigRepository(dependencies: ModelConfigRepositoryD
     };
 
     const commit = (config: AiConfig) => {
+        if (applyingRemote) return Promise.resolve();
         latestConfig = config;
         generation += 1;
         publish({ dirty: true });
@@ -95,6 +110,22 @@ export function createModelConfigRepository(dependencies: ModelConfigRepositoryD
         hydrate,
         commit,
         flush: scheduleDrain,
+        refresh: async () => {
+            if (!hydrated || state.dirty || drainPromise) return false;
+            const started = generation;
+            const current = await dependencies.read();
+            if (generation !== started || state.dirty || drainPromise) return false;
+            if (current.revision <= state.revision) return true;
+            baseConfig = structuredClone(current.config);
+            latestConfig = current.config;
+            publish({ revision: current.revision, status: "saved", dirty: false, error: "" });
+            applyRemote(current.config);
+            return true;
+        },
+        subscribeRemote: (listener: (config: AiConfig) => void) => {
+            remoteListeners.add(listener);
+            return () => remoteListeners.delete(listener);
+        },
         getState: () => state,
         subscribe: (listener: (next: ModelConfigPersistenceState) => void) => {
             listeners.add(listener);
@@ -119,3 +150,5 @@ export const commitModelConfig = repository.commit;
 export const flushModelConfig = repository.flush;
 export const getModelConfigPersistenceState = repository.getState;
 export const subscribeModelConfigPersistence = repository.subscribe;
+export const refreshModelConfig = repository.refresh;
+export const subscribeRemoteModelConfig = repository.subscribeRemote;

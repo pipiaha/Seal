@@ -2,6 +2,19 @@ import referenceVideoErrors from "./fixtures/reference-video-errors.json";
 import { describe, expect, test } from "bun:test";
 import { ApiError } from "../src/services/api/request";
 
+test("channel configuration failures do not advise waiting for generation capacity", () => {
+    const failure = explainGenerationError({ error: { code: "channel_concurrency_unavailable", message: "读取渠道并发配置失败：record not found" } });
+    expect(failure.category).toBe("local_config");
+    expect(failure.reason).toBe("渠道运行配置读取失败");
+    expect(failure.message).not.toContain("等待已有任务");
+    expect(failure.retryable).toBe(false);
+    expect(failure.blockAutomaticRetry).toBe(true);
+    expect(explainGenerationError(failure.message).category).toBe("local_config");
+    expect(formatGenerationDiagnostics(failure)).toContain("错误来源：本地运行配置");
+    expect(explainGenerationError({ error: { code: "channel_concurrency_wait_timeout" } }).category).toBe("concurrency");
+    expect(explainGenerationError({ error: { code: "channel_concurrency_wait_cancelled" } }).category).toBe("cancelled");
+});
+
 test("reference transport admission identifies blocked inputs and survives persisted display", () => {
     const message = "当前渠道需要在线素材链接：参考图片 2、参考视频 1无法直接读取。请替换为可访问的 HTTPS 链接，或切换支持本地素材的渠道";
     const failure = explainGenerationError(new ApiError(message, { status: 400, reason: "reference_media_requires_url" }));

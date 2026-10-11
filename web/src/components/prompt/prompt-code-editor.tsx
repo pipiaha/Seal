@@ -1,5 +1,5 @@
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useImperativeHandle, useRef, type ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -10,6 +10,7 @@ export type PromptCodeEditorHandle = {
 };
 
 type PromptCodeEditorProps = {
+    extensions?: ComponentProps<typeof CodeMirror>["extensions"];
     value: string;
     onChange?: (value: string) => void;
     readOnly?: boolean;
@@ -17,7 +18,7 @@ type PromptCodeEditorProps = {
     className?: string;
 };
 
-export const PromptCodeEditor = forwardRef<PromptCodeEditorHandle, PromptCodeEditorProps>(function PromptCodeEditor({ value, onChange, readOnly = false, ariaLabel, className }, ref) {
+export const PromptCodeEditor = forwardRef<PromptCodeEditorHandle, PromptCodeEditorProps>(function PromptCodeEditor({ value, onChange, readOnly = false, ariaLabel, className, extensions = [] }, ref) {
     const theme = useActiveTheme();
     const viewRef = useRef<EditorView | null>(null);
 
@@ -45,7 +46,7 @@ export const PromptCodeEditor = forwardRef<PromptCodeEditorHandle, PromptCodeEdi
             theme={theme}
             readOnly={readOnly}
             editable={!readOnly}
-            extensions={[EditorView.lineWrapping]}
+            extensions={[EditorView.lineWrapping, ...extensions]}
             basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: !readOnly, highlightActiveLineGutter: !readOnly }}
             aria-label={ariaLabel}
             onCreateEditor={(view) => { viewRef.current = view; }}

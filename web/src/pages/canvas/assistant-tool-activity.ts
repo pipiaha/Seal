@@ -23,6 +23,7 @@ export function toolActivityLabel(tool: string): string {
         skill_list: "查看已安装技能", skill_file: "读取技能文件", skill_author: "编写技能", skill_search: "搜索技能", skill_download: "下载技能",
         workspace_info: "检查工作目录", workspace_files: "处理工程文件", workspace_skill: "准备技能脚本", workspace_run: "执行工程脚本", workspace_runs: "读取脚本执行记录", workspace_install: "安装工程依赖",
         workspace_asset_import: "复制素材到工程", workspace_publish: "保存结果到资产库", assets_search: "检索资产库", web_search: "联网搜索", web_read: "读取网页", web_download: "下载工程素材",
+        provider_channels_read: "读取模型渠道", provider_script_preview: "检查接口配置", provider_channel_save: "保存模型渠道",
         workflow_read: "读取制作流程", workflow_checkpoint: "保存制作进度", tool_result_read: "读取检查结果", media_generation_propose: "准备生成方案",
         media_generation_task: "查询生成任务", media_generation_list: "读取生成方案", media_transcribe: "提交语音识别任务",
         media_transcription: "查询识别结果", media_asr_status: "检查语音识别能力" };

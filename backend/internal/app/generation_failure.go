@@ -51,7 +51,7 @@ func applyAppFailureWrappers(err error, failure generation.Failure) generation.F
 		return generation.CircuitOpenFailure()
 	}
 	if code, _ := ChannelSlotFailureDetails(err); code != "" {
-		failure = generation.WithConcurrencyFailure(failure)
+		failure = generation.WithChannelSlotFailure(failure, code)
 	}
 	var appErr *kernel.AppError
 	if errors.As(err, &appErr) && appErr != nil {

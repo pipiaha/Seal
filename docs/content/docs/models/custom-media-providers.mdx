@@ -8,12 +8,12 @@ title: 自定义图片、视频接口与本地 ComfyUI
 
 ## 供应商预设
 
-图片和视频分类均提供 Agnes AI。国际服务地址为 `https://apihub.agnes-ai.com/v1`，仍需用户提供该服务的 API Key。
+图片和视频分类均提供 Agnes AI，添加时默认国内站 `https://api.agnes-ai.cn/v1`。在「服务站点」中也可选择国际站 `https://apihub.agnes-ai.com/v1`。按创建 API Key 的控制台选择地址；国内站与国际站的密钥不应混用，否则可能返回 `401 Invalid token`。切换站点只调整服务地址，保留密钥、模型与协议；已有渠道不会自动切换站点。
 
 - 图片默认模型 `agnes-image-2.5-flash`：复用已有 Agnes Image 协议，JSON `POST /v1/images/generations`，参考图片映射到 `extra_body.image`，输出请求 URL。可在现有能力设置中调整比例、1K／2K／4K 档，实际尺寸可能由供应商归一化。不使用 OpenAI 的 `/images/edits`。
 - 视频默认模型 `agnes-video-2.5-flash`：已有 Agnes 原生异步协议。可手动添加 `agnes-video-2.5` 等实际开通的模型 ID。参考素材需供应商可读取的公开 URL；添加预设不代表所有本地素材可以直接发送。
 
-协议依据：[图片说明](https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash)、[视频说明](https://wiki.agnes-ai.com/en/docs/agnes-video-25)。预设不包含凭证，也不自动发起生成。
+协议依据：[国内图片说明](https://wiki.agnes-ai.cn/zh-Hans/docs/agnes-image-20-flash)、[国际图片说明](https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash)、[视频说明](https://wiki.agnes-ai.com/en/docs/agnes-video-25)。预设不包含凭证，也不自动发起生成。
 
 ## 普通 HTTP 服务
 
@@ -23,13 +23,23 @@ title: 自定义图片、视频接口与本地 ComfyUI
 
 模型的输入限制、比例、时长等在「生成参数与连接测试」中调整，这里不再重复显示接口配置。生成测试仍需确认后才会提交真实任务。
 
-1. 填写提交方法、路径及 JSON 或 Multipart 格式。
-2. 在参数映射中填写供应商字段名，选择提示词、模型、时长、比例等输入。
-3. 需要异步查询时启用查询接口，填写任务 ID 路径、状态路径及状态值映射。
-4. 填写结果 URL 或 Base64 的提取路径。裸 Base64 需选择对应的文件类型；结果需要鉴权下载时，可改用独立文件下载接口。
-5. 供应商确实支持定向取消时，配置取消接口；收到 HTTP 成功后仍查询任务终态，只有明确取消状态才确认取消。
+1. 在调用方式中选择「自定义 HTTP 接口」，直接编辑 JavaScript 配置，不需要逐行填写参数映射。
+2. 选择同步图片、异步视频、数组与嵌套参数或 Multipart 模板，用真实供应商文档替换路径和字段。
+3. 可从「插入变量」选择模型、提示词、时长和素材。下方展开示例输入后，点击「检查并预览请求」查看最终参数；预览不会请求供应商，不生成或计费。还可填写供应商响应 JSON 验证提取规则。
+4. 可直接把供应商 API 文档发给 Seal 创作助手，要求它配置指定图片／视频模型。助手会读取当前渠道、编写脚本、检查并直接保存，界面自动刷新。「复制给助手的配置说明」提供可选的格式说明；按钮本身只复制，不调用模型。其他助手生成的脚本仍可手动粘贴或导入。
+5. 先添加模型 ID，再保存。保存时也会检查脚本。每个模型分别保存配置，已提交的任务继续使用提交时的配置快照。
 
-路径 `/jobs/{task_id}` 中的任务 ID 会经过路径转义。默认路径追加在渠道基础地址后；查询接口可选择从域名根开始。路径不能指向另一台服务。URL 查询参数填在查询参数配置中。
+### 让创作助手直接配置
+
+在画布或剪辑工程的助手中提供服务地址、模型 ID、API Key 和接口文档，例如：「根据这份文档，给我的视频渠道配置这个模型，检查后连同我提供的 Key 直接保存，保留其他模型。」已有渠道无需再次提供密钥。助手读取渠道时只获得名称、地址、模型和脱敏脚本，不会读取已保存的 API Key 或请求头值。
+
+助手可以新建自定义 HTTP 渠道，或更新已有渠道的一个图片／视频模型。用户在对话中提供的 API Key 通过保存工具的 `apiKey` 字段一并写入现有加密配置；非空新 Key 替换原值，省略或留空保留原值。执行记录和保存结果不回显 Key。已有渠道的服务地址、鉴权方式和请求头值仍由设置页管理，不能让助手把原密钥改发到其他地址。默认模型仅在用户要求时设置。文字模型、内置／托管渠道和 ComfyUI 工作流不通过此工具修改。
+
+在对话中提供 Key 时，它属于发送给当前助手模型的对话内容，并随现有会话保存；也可以继续在「模型配置」中填写，不经过助手对话。Key 不应写入接口脚本、URL 或 Skill 文件。
+
+保存前重新检查脚本，以当前配置版本保护人工改动。同一提交重放不重复创建渠道。前端保存遇到并发修改时，只合并互不冲突的字段；同一字段的冲突明确保留为待处理，不整份覆盖远端配置。保存不会进行真实生成，不能把「配置已保存」说成「接口已生成验证成功」。
+
+路径 `/jobs/{task_id}` 中的任务 ID 会经过路径转义。默认路径追加在渠道基础地址后；操作中设置 `originPath: true` 可从域名根开始。路径不能指向另一台服务。URL 查询参数填写在操作的 `query` 对象中。
 
 响应路径支持嵌套与数组，例如 `data.task_id`、`data.status`、`data.*.url`。非标准状态可配置为：
 
@@ -39,32 +49,50 @@ title: 自定义图片、视频接口与本地 ComfyUI
 
 状态仍在处理中时，即便返回了占位 URL，也不会下载并宣布完成。
 
-### JSON 模板
+### JavaScript 接口配置
 
-复杂接口可填写 JSON 模板，使用声明式表达式。它不能运行 JavaScript，不能读取任意工程文件或应用配置。参数映射与模板同时存在时，映射字段覆盖模板同名顶层字段；嵌套对象请集中写在模板中，避免覆盖整个对象。
+配置是一个 JavaScript **对象表达式**，无需 `import`、`export` 或 `fetch`。Seal 在 Go 运行端内嵌的 JavaScript 引擎中进行参数转换；提交、鉴权、文件上传、轮询、取消与下载继续使用现有任务执行器。脚本不提供文件、环境变量、渠道密钥或网络 API；不支持异步函数。源码上限 64 KiB，每次转换和响应提取共用 200 毫秒执行限时。
 
-统一输入包括 `request.model`、`request.prompt`、`request.duration`（数字）、`request.aspectRatio`、`request.resolution`、`request.quality`、`request.imageCount`、`request.generateAudio`、`request.watermark`、`request.extra.size`（用户输入的尺寸值）、`request.images/videos/audios`（素材对象数组）。查询阶段可引用 `taskId`。
+直接可用的变量包括 `model`、`prompt`、`seconds`（数字）、`aspectRatio`、`resolution`、`quality`、`count`、`generateAudio`、`watermark`、`size`、`extra`。`images/videos/audios` 是 URL 或 Data URL 字符串数组；`request.images/videos/audios` 是完整素材对象数组。`firstFrame/lastFrame` 是明确标记了首尾帧角色的图片链接，没有时为空字符串。查询阶段可引用 `taskId`。
 
-```json
+```javascript
 {
-  "model": { "$ref": "request.model" },
-  "prompt": { "$ref": "request.prompt" },
-  "seconds": { "$toString": { "$ref": "request.duration" } },
-  "images": {
-    "$map": {
-      "from": { "$ref": "request.images" },
-      "as": "image",
-      "in": { "$coalesce": [{ "$ref": "image.url" }, { "$ref": "image.dataUrl" }] }
+  requiresPublicMediaUrls: true,
+  create: {
+    method: "POST",
+    path: "/generate",
+    contentType: "application/json",
+    body: {
+      model,
+      params: [
+        { type: "text", value: prompt },
+        ...images.map(url => ({ type: "image", value: url })),
+        ...videos.map(url => ({ type: "video", value: url }))
+      ],
+      options: { seconds, aspect_ratio: aspectRatio }
     }
+  },
+  poll: { method: "GET", path: "/tasks/{task_id}" },
+  response: {
+    taskId: data => data.data.task_id,
+    status: "data.status",
+    statusMap: { "0": "pending", "1": "processing", "2": "succeeded", "3": "failed" },
+    result: data => data.data.outputs?.map(item => item.url) || [],
+    error: data => data.error?.message || null,
+    message: data => data.message || ""
   }
 }
 ```
 
-Multipart 文件字段示例：`[{"name":"image","source":{"$ref":"request.images.0"}}]`。这引用已授权的素材，不是本机路径。
+数组有固定顺序时，直接写 `params: [prompt, images[0], images[1], seconds]`；需要名为 `param[0]` 的顶层字段时写 `body: { "param[0]": prompt, "param[1]": images[0] }`。字段名和数组的区别以供应商文档为准，不能把数组下标当成普通字段名。没有参考素材的场景应使用条件表达式或 `.map()`，避免强行读取不存在的元素。
 
-鉴权选择「API Key / Bearer」「指定请求头」或「无需鉴权」。密钥在渠道连接处填写，不能硬编码到模板、查询参数或工作流中。要求公开素材 URL 的接口，应启用相应选项；本地素材无法公开读取时会明确报错。
+`response.taskId/status/result/error/message/base64` 可以填字段路径或同步函数；`result` 返回链接或链接数组，`base64` 返回编码或编码数组。裸 Base64 需指定 `inlineMime`，例如 `image/png`。异步接口必须配置任务 ID 与状态提取规则；处理中返回占位链接不会提前下载。供应商返回失败时，`error` 返回错误信息，正常时返回 `null`，否则会被当作失败。
 
-接口配置支持导入、导出 Seal JSON 配置包，仅携带协议、工作流及能力声明，不包含渠道地址、密钥和自定义请求头。检测到嵌入的凭证字段时拒绝导入或导出。工作流可能仍包含用户填写的提示词、文件名或其他业务内容，分享前请检查。
+Multipart 操作的文件字段示例：`files: request.images.map(image => ({ name: "image", source: image }))`。这引用已授权的素材，不是本机路径。独立鉴权下载可配置 `result: { method: "GET", path: "/tasks/{task_id}/file" }`。供应商支持定向取消时配置 `cancel` 操作；收到 HTTP 成功后仍核对任务终态，只有明确取消状态才确认取消。操作结构应固定，条件表达式用于参数值和结果提取。
+
+鉴权选择「API Key / Bearer」「指定请求头」或「无需鉴权」。密钥和请求头在渠道连接处填写，不能硬编码到脚本、查询参数或工作流中。要求公开素材 URL 的接口设置 `requiresPublicMediaUrls: true`；本地素材无法公开读取时会明确报错。
+
+接口配置支持导入 `.js` 对象表达式，以及导入、导出 Seal JSON 配置包。配置包仅携带脚本／工作流和能力声明，不包含渠道地址、密钥和自定义请求头；明确的凭证字段会拒绝导入或导出。任意代码字符串不能可靠自动识别所有硬编码秘密，不要在脚本内写密钥。分享前检查提示词、文件名和其他业务内容。已有声明式接口配置仍可执行，编辑器会把可转换的规则展示为 JavaScript；不支持的特殊表达式保留原配置并提示选择模板重新配置。
 
 ## 本地 ComfyUI
 

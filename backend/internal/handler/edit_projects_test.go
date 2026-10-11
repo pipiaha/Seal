@@ -71,9 +71,14 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 	}
 	validHost := map[string]string{assistantHostTokenHeader: "host-test", assistantTurnHeader: turnID}
 	ui := map[string]string{"X-Desktop-Token": "launch", "X-Beeftv-UI-Bootstrap": "ui"}
-	creatorCall := func(project, action string, headers map[string]string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:18090/api/assistant/projects/"+project+"/"+action, strings.NewReader("{}"))
+	creatorCall := func(project, action string, headers map[string]string, bodies ...string) *httptest.ResponseRecorder {
+		body := "{}"
+		if len(bodies) > 0 {
+			body = bodies[0]
+		}
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:18090/api/assistant/projects/"+project+"/"+action, strings.NewReader(body))
 		request.RemoteAddr = "127.0.0.1:12345"
+		request.Header.Set("Content-Type", "application/json")
 		for key, value := range headers {
 			request.Header.Set(key, value)
 		}
@@ -94,10 +99,21 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 		{"edit_canvas", "skills/list", map[string]string{assistantHostTokenHeader: "host-test", assistantTurnHeader: turnID, "X-Beeftv-Client": "external"}, 403},
 		{"edit_canvas", "media/accept/any", validHost, 403},
 		{"edit_canvas", "media/transcribe", validHost, 400},
+		{"edit_canvas", "providers/read", nil, 403},
+		{"edit_canvas", "providers/read", validHost, 200},
+		{"other_canvas", "providers/read", validHost, 403},
+		{"edit_canvas", "providers/save", validHost, 400},
 	} {
 		if result := creatorCall(probe.project, probe.action, probe.headers); result.Code != probe.status {
 			t.Fatalf("creator %s %s: %d %s", probe.project, probe.action, result.Code, result.Body.String())
 		}
+	}
+	channelEdit, _ := json.Marshal(map[string]any{"operationId": strings.Repeat("d", 64), "expectedRevision": 0, "name": "Assistant Channel", "baseUrl": "https://example.com/v1", "capability": "image", "model": "fixture-image", "apiKey": "synthetic-route-key", "script": `{create:{method:"POST",path:"/images",body:{model,prompt}},response:{result:"url"}}`})
+	if result := creatorCall("edit_canvas", "providers/save", validHost, string(channelEdit)); result.Code != 200 || !strings.Contains(result.Body.String(), `"saved":true`) || !strings.Contains(result.Body.String(), `"needsCredential":false`) || strings.Contains(result.Body.String(), "synthetic-route-key") {
+		t.Fatalf("assistant could not save channel: %d %s", result.Code, result.Body.String())
+	}
+	if result := creatorCall("edit_canvas", "providers/save", validHost, `{"secretKey":"forbidden"}`); result.Code != 400 {
+		t.Fatal("assistant accepted unsupported credential fields")
 	}
 	for _, probe := range []struct {
 		label, path string
@@ -129,6 +145,9 @@ func TestEditingRoutesRequireTrustedUIOrOwnedOpenAssistantTurn(t *testing.T) {
 	}
 	if result := creatorCall("edit_canvas", "skills/list", validHost); result.Code != 403 {
 		t.Fatal("closed creator turn accepted")
+	}
+	if result := creatorCall("edit_canvas", "providers/read", validHost); result.Code != 403 {
+		t.Fatal("closed turn accessed provider tools")
 	}
 
 	// With a real supervisor object, admission failures must happen before

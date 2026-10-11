@@ -2,9 +2,23 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+
 	"infinite-canvas/backend/internal/generation"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/provider/comfyui"
 )
+
+func (s *Service) PreviewProviderScript(ctx context.Context, source string, request protocol.GenerationRequest, response json.RawMessage) (map[string]any, error) {
+	if !s.IsLocalMode() {
+		return nil, BadAuthRequest("接口脚本仅支持本地工作区")
+	}
+	result, err := protocol.PreviewProviderScript(ctx, source, request, response)
+	if err != nil {
+		return nil, BadAuthRequest(err.Error())
+	}
+	return result, nil
+}
 
 func (s *Service) InspectLocalComfyUI(ctx context.Context, config generation.Config) (map[string]any, error) {
 	if !s.IsLocalMode() {

@@ -81,6 +81,7 @@ func RegisterAssistantCreatorRoutes(api *gin.RouterGroup, svc *app.Service, host
 		ok(c, status)
 	})
 	group := api.Group("/assistant/projects/:projectId")
+	registerAssistantChannelRoutes(group, svc)
 	group.POST("/media/asr-status", func(c *gin.Context) {
 		if _, _, valid := creatorScope(c, svc); !valid {
 			return

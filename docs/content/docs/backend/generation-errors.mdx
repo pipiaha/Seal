@@ -46,12 +46,13 @@ description: 画布、任务中心和批量生成如何把上游失败变成可�
 | `moderation_output` | 输出审核 | 调整输入后新建 | 原任务否 |
 | `invalid_params` | 400/422、invalid_request、尺寸/格式 | 检查模型与参数 | 否 |
 | `local_storage` | 500 + `reason=local_storage_failed`，本地入队前读写失败 | 尚未提交生成；重启应用，仍失败则更新并联系支持 | 否 |
+| `local_config` | `channel_concurrency_unavailable`，渠道运行配置读取失败 | 重新打开应用，仍失败则保留排查信息并联系支持 | 否 |
 | `context_too_long` | context_length、长度超出 | 缩短输入 | 否 |
 | `input_inaccessible` | url error、素材无法读取 | 检查素材 | 否 |
 | `input_too_large` | 413、too large | 压缩或更换素材 | 否 |
 | `model_missing` | 404、model_not_found | 检查模型名和渠道 | 否 |
 | `throttled` | 429 且非额度码 | 稍后重试 | 可稍后 |
-| `concurrency` | 渠道并发槽位 | 等待已有任务 | 可稍后 |
+| `concurrency` | 等待渠道并发槽位超时、上游明确并发超限 | 等待已有任务 | 可稍后 |
 | `provider_unavailable` | 5xx、HTML 网关页 | 稍后重试 | 可稍后 |
 | `network` | 连接失败 | 检查网络并核对原任务 | 否 |
 | `timeout` | 408/504/524 | 先查原任务 | 否 |
@@ -63,6 +64,8 @@ description: 画布、任务中心和批量生成如何把上游失败变成可�
 | `results_missing` | 没有可用结果 | 查看详情 | 否 |
 | `malformed_response` | 非 JSON、HTML | 查看详情、核对原任务 | 否 |
 | `unknown` | 无法归类 | 查看详情后再决定 | 否 |
+
+桌面自定义渠道使用本地运行策略和按渠道 ID 隔离的并发槽位，不查询系统渠道表。系统渠道仍校验数据库配置。配置读取失败不能当作并发耗尽；取消等待使用 `cancelled`，不提示等待其他任务。错误发生在已有上游任务的回查或结果读取阶段时，保留接单状态和原任务编号，不自动重复生成。
 
 `AccountOverdueError`、`OperationDenied.ServiceOverdue` 属于供应商计费问题，不能用 HTTP 403 推断权限不足；`InflightBatchsizeExceeded` 属于并发限制，`SetLimitExceeded` 属于配置的用量上限，不统一提示“请求频繁，稍后再试”。`ContentSecurityDetectionError` 表示审核服务内部失败，不能声称用户内容违规。
 

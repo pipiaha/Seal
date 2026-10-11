@@ -1,12 +1,12 @@
 import { App, Button } from "antd";
 import { ArrowLeft, Film, Globe, Image, Mic, Speech, Type } from "lucide-react";
-import { useLayoutEffect, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { PageHeader } from "@/components/layout/workspace-page";
 import { MODEL_CHANNEL_CATEGORIES, channelModelsForCapability, type ModelChannelCategory } from "@/lib/model-channel-settings";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { flushModelConfig, getModelConfigPersistenceState } from "@/services/model-config-repository";
+import { flushModelConfig, getModelConfigPersistenceState, refreshModelConfig } from "@/services/model-config-repository";
 import { ChannelSettingsPane, isChannelReady } from "./channel-settings-pane";
 import { ModelChannelDefaults } from "./model-channel-defaults";
 import { AsrSettingsPane } from "./asr-settings-pane";
@@ -34,6 +34,10 @@ export default function SettingsPage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const shouldPromptContinue = searchParams.get("continue") === "1";
     const icons = { text: Type, image: Image, video: Film, audio: Speech, asr: Mic, search: Globe };
+
+    useEffect(() => {
+        void refreshModelConfig().catch(() => { message.error("无法读取最新渠道配置，请稍后重新打开"); });
+    }, [message]);
 
     useLayoutEffect(() => {
         document.body.classList.add("app-user-overlays");

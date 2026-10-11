@@ -29,6 +29,7 @@ const (
 	CategoryModerationOutput    FailureCategory = "moderation_output"
 	CategoryInvalidParams       FailureCategory = "invalid_params"
 	CategoryLocalStorage        FailureCategory = "local_storage"
+	CategoryLocalConfig         FailureCategory = "local_config"
 	CategoryContextTooLong      FailureCategory = "context_too_long"
 	CategoryInputInaccessible   FailureCategory = "input_inaccessible"
 	CategoryInputTooLarge       FailureCategory = "input_too_large"
@@ -91,6 +92,7 @@ var categoryCopies = map[FailureCategory]categoryCopy{
 	CategoryModerationOutput:    {Reason: "生成结果未通过内容安全审核", Action: "请调整提示词或参考素材后重新生成"},
 	CategoryInvalidParams:       {Reason: "模型不接受当前参数", Action: "请检查模型、尺寸、时长、格式或数量后重试"},
 	CategoryLocalStorage:        {Reason: "本地数据库无法读写", Action: "请重启应用；若仍失败，请保留排查信息并联系支持，不要重复生成"},
+	CategoryLocalConfig:         {Reason: "渠道运行配置读取失败", Action: "请重新打开应用后重试；若仍失败，请保留排查信息并联系支持"},
 	CategoryContextTooLong:      {Reason: "输入内容超出模型长度限制", Action: "请缩短提示词或减少参考内容后重试"},
 	CategoryInputInaccessible:   {Reason: "参考素材无法读取", Action: "请检查素材后重试"},
 	CategoryInputTooLarge:       {Reason: "参考素材过大", Action: "请压缩或更换素材后重试"},
@@ -203,7 +205,7 @@ var providerCodeCategories = map[string]FailureCategory{
 	"too_many_requests":                CategoryThrottled,
 	"resource_exhausted":               CategoryThrottled,
 	"channel_concurrency_wait_timeout": CategoryConcurrency,
-	"channel_concurrency_unavailable":  CategoryConcurrency,
+	"channel_concurrency_unavailable":  CategoryLocalConfig,
 	"unavailable":                      CategoryProviderUnavailable,
 	"overloaded":                       CategoryProviderUnavailable,
 	"internal_error":                   CategoryProviderUnavailable,
@@ -229,6 +231,9 @@ var providerCodeCategories = map[string]FailureCategory{
 	"bad_gateway":                      CategoryProviderUnavailable,
 	"internal":                         CategoryProviderUnavailable,
 	"failed_precondition":              CategoryInvalidParams,
+
+	"channel_concurrency_wait_cancelled": CategoryCancelled,
+
 	// BeefAPI stable codes: internal failures without a reliable caller action
 	// stay explicitly unknown instead of inheriting a misleading HTTP 400.
 	"violation_fee.grok.csam":              CategoryModerationInput,
@@ -640,11 +645,13 @@ func WithDownloadFailure(failure Failure, taskID string) Failure {
 	return normalizeFailure(failure)
 }
 
-func WithConcurrencyFailure(failure Failure) Failure {
-	if failure.Structured && failure.Category != CategoryUnknown {
+func WithChannelSlotFailure(failure Failure, code string) Failure {
+	category, matched := categoryFromProviderCode(code)
+	if !matched {
 		return failure
 	}
-	failure.Category = CategoryConcurrency
+	failure.Category = category
+	failure.FromCode = true
 	failure.Reason = ""
 	failure.Action = ""
 	return normalizeFailure(failure)

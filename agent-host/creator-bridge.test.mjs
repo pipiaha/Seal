@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createCreatorBridge } from './creator-bridge.mjs';
+import { toolDisplay } from './tool-display.mjs';
 
 test('creator tools keep the current turn, immutable skill activation and truthful ASR task responses', async t => {
   const calls = [];
@@ -43,6 +44,17 @@ test('creator tools keep the current turn, immutable skill activation and truthf
   assert.equal(JSON.parse(failed.content[0].text).exitCode, 7);
   assert.equal(activity.at(-1).isError, true);
   const readOnly = createCreatorBridge({ readOnly: true, turnBudgetContext: new AsyncLocalStorage() }).buildTools('cut_project', [], {}, turn, 'session');
+  assert.ok(readOnly.some(item => item.name === 'provider_channels_read'));
+  assert.ok(!readOnly.some(item => item.name === 'provider_channel_save'));
+  const channelArgs = { expectedRevision: 1, channelId: 'local', capability: 'image', model: 'image-model', script: '{}', apiKey:'synthetic-tool-key' };
+  assert.ok(tool('provider_channel_save').parameters.properties.apiKey);
+  await tool('provider_channel_save').execute('configure-channel', channelArgs);
+  assert.equal(calls.at(-1).path, '/api/assistant/projects/cut_project/providers/save');
+  assert.equal(calls.at(-1).body.operationId.length, 64);
+  assert.equal(calls.at(-1).body.apiKey,channelArgs.apiKey);
+  assert.ok(!JSON.stringify(activity).includes(channelArgs.apiKey));
+  assert.ok(!JSON.stringify(toolDisplay({type:'tool_execution_start',args:channelArgs})).includes(channelArgs.apiKey));
+  assert.equal(calls.at(-1).headers['x-beeftv-agent-turn'], 'resumed-turn');
   assert.ok(!readOnly.some(item => ['skill_author', 'skill_download', 'media_transcribe'].includes(item.name)));
 });
 

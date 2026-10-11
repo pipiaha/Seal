@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { serviceConnectionError, serviceModelProfile, modelCatalogRequestURL, modelServicePresetsFor, modelServicePresetConnection } from "../src/lib/model-service-presets";
+import { serviceConnectionError, serviceModelProfile, servicePresetFor, serviceSupportsModelCatalog, modelCatalogRequestURL, modelServicePresetsFor, modelServicePresetConnection } from "../src/lib/model-service-presets";
 import { modelConnectionResultDetail, testChannelModelConnection } from "../src/lib/model-connection-test";
 import { applyFetchedChannelModelCatalog, modelConfigChannelStatusLabel } from "../src/pages/settings/channel-settings-pane";
 import { backendProviderConfig } from "../src/services/api/generation-task";
@@ -21,6 +21,23 @@ test("supplier presets are category-specific and Bailian text does not use its n
     expect(modelServicePresetConnection(bailian, "text").baseUrl).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1");
     expect(modelServicePresetConnection(bailian, "video").baseUrl).toBe("https://dashscope.aliyuncs.com");
     expect(modelServicePresetsFor("audio").map(p => p.id)).toEqual(["compatible", "openai", "doubao-tts", "xfyun-tts"]);
+});
+
+test("Agnes defaults to the domestic API and recognizes both sites without changing saved connections", () => {
+    const agnes = modelServicePresetsFor("image").find(preset => preset.id === "agnes")!;
+    expect(agnes.connections?.map(connection => connection.value)).toEqual(["https://api.agnes-ai.cn/v1", "https://apihub.agnes-ai.com/v1"]);
+    const installed = ["image", "video"].map(capability => ({ value: `agnes-${capability}`, capability, enabled: true } as ModelProtocolDefinition));
+    for (const capability of ["image", "video"] as const) {
+        expect(modelServicePresetConnection(agnes, capability).baseUrl).toBe("https://api.agnes-ai.cn/v1");
+        for (const baseUrl of ["https://api.agnes-ai.cn/v1", "https://api.agnes-ai.cn", "https://apihub.agnes-ai.com/v1"]) {
+            const channel = createModelChannel({ baseUrl, apiKey: "synthetic-key" });
+            expect(servicePresetFor(channel)).toBe("agnes");
+            expect(serviceSupportsModelCatalog(channel, capability)).toBe(false);
+            expect(serviceModelProfile(channel, { id: `agnes-${capability}-2.5-flash` }, installed, capability).protocol).toBe(`agnes-${capability}`);
+            expect(channel.baseUrl).toBe(baseUrl);
+        }
+    }
+    expect(servicePresetFor(createModelChannel({ baseUrl: "https://api.agnes-ai.cn.example.org/v1" }))).toBe("compatible");
 });
 
 test("persisted boolean video options are normalized without turning false back on", () => {

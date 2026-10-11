@@ -48,6 +48,7 @@ camera_language_guide.md
 build/depth-runtime/*.zip
 backend/cmd/server/server
 backend/server
+backend/server.exe
 backend/desktop
 backend/cmd/desktop/build/
 backend/cmd/desktop/build/bin/

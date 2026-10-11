@@ -12,6 +12,9 @@ below remains subject to its own license.
 
 Versions are locked by `web/bun.lock`.
 
+`@codemirror/lang-javascript` is the JavaScript configuration editor language
+package, distributed under the MIT license included in its installed package.
+
 `@fix-webm-duration/fix` is a direct frontend dependency distributed under
 the MIT license; its license is included in the installed package.
 
@@ -39,6 +42,10 @@ terms.
 ## Go runtime dependencies
 
 Versions are locked by `backend/go.sum`.
+
+`github.com/dop251/goja` is the embedded JavaScript parameter-conversion engine,
+distributed under the MIT license. Its source and license are available at
+<https://github.com/dop251/goja>; the exact revision is pinned in `backend/go.mod`.
 
 | License | Direct modules |
 | --- | --- |

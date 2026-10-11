@@ -28,6 +28,106 @@ tags:
   - name: assistant
   - name: creation-conversations
 paths:
+  /assistant/projects/{projectId}/providers/read:
+    post:
+      tags: [assistant]
+      summary: 助手读取本地渠道摘要与配置版本（不含密钥）
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: data.revision 与 channels，脚本隐藏已知保存的凭据}
+        "403": {description: 非可信调用者或助手轮次不属于当前工程}
+  /assistant/projects/{projectId}/providers/preview:
+    post:
+      tags: [assistant]
+      summary: 助手检查自定义图片／视频脚本，不请求供应商
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [capability, model, script]
+              properties:
+                capability: {type: string, enum: [image, video]}
+                model: {type: string}
+                script: {type: string}
+                request: {type: object, additionalProperties: true}
+                response: {type: object, additionalProperties: true}
+      responses:
+        "200": {description: data.valid、操作请求与可选响应提取结果}
+        "400": {description: 脚本或提取规则无效}
+        "403": {description: 非可信调用者或助手轮次不属于当前工程}
+  /assistant/projects/{projectId}/providers/save:
+    post:
+      tags: [assistant]
+      summary: 助手保存图片／视频渠道接口及可选用户提供的 API Key
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operationId, expectedRevision, capability, model, script]
+              properties:
+                operationId: {type: string, pattern: "^[a-fA-F0-9]{64}$"}
+                expectedRevision: {type: integer, format: int64}
+                channelId: {type: string, description: 不提供时新建渠道}
+                name: {type: string}
+                baseUrl: {type: string, description: 新建时必填，不含凭证的 HTTPS 地址}
+                authType: {type: string, enum: [none, bearer, header]}
+                authHeader: {type: string}
+                apiKey: {type: string, maxLength: 4096, writeOnly: true, description: 用户主动提供的新密钥；省略或留空保留原值，不在结果中返回}
+                capability: {type: string, enum: [image, video]}
+                model: {type: string}
+                script: {type: string}
+                setDefault: {type: boolean, default: false}
+      responses:
+        "200": {description: data.saved/revision/channelId/model/needsCredential/replayed；generated 为 false}
+        "400": {description: 无效配置或尝试修改受保护的连接／不支持的字段}
+        "403": {description: 非可信调用者或助手轮次不属于当前工程}
+        "409": {description: 其他操作已更新模型配置，需要重新读取}
+  /workspace/providers/script/preview:
+    post:
+      tags: [meta]
+      summary: 本地工作区预览自定义媒体 JavaScript 接口（不生成）
+      description: 只执行参数转换与可选响应提取，不连接供应商。最多 256 KiB 请求体、64 KiB 脚本；每次转换限时 200 毫秒。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [script, request]
+              properties:
+                script: {type: string, description: JavaScript 对象表达式}
+                request:
+                  type: object
+                  required: [capability, model]
+                  properties:
+                    capability: {type: string, enum: [image, video]}
+                    model: {type: string}
+                    prompt: {type: string}
+                    duration: {type: integer}
+                    aspectRatio: {type: string}
+                    images: {type: array, items: {type: object}}
+                    videos: {type: array, items: {type: object}}
+                    audios: {type: array, items: {type: object}}
+                  additionalProperties: true
+                response: {type: object, description: 可选的供应商响应示例}
+      responses:
+        "200":
+          description: data.valid 与 create/poll/cancel/result 请求预览，可选 parsedResponse
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Envelope"}
+        "400": {description: 脚本、样例输入或结果提取规则无效}
+        "403": {description: 当前不是本地工作区}
   /workspace/providers/comfyui/inspect:
     post:
       tags: [meta]

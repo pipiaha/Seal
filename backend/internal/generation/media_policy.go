@@ -5,12 +5,17 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/providerpreset"
 )
 
 func MediaHydrationPolicyFor(ctx context.Context, input Input) MediaHydrationPolicy {
 	if input.Config.CustomProvider != nil {
-		return MediaHydrationPolicy{RequireURL: input.Config.CustomProvider.RequiresPublicMediaURLs, PreferURL: input.Config.CustomProvider.RequiresPublicMediaURLs}
+		requireURL := input.Config.CustomProvider.RequiresPublicMediaURLs
+		if adapter, err := protocol.ConfiguredProvider(*input.Config.CustomProvider, protocol.Capability(input.Mode)); err == nil {
+			requireURL = adapter.Metadata().RequiresPublicMediaURLs
+		}
+		return MediaHydrationPolicy{RequireURL: requireURL, PreferURL: requireURL}
 	}
 	if input.Config.InterfaceType == "full-video" {
 		return MediaHydrationPolicy{KeepLocal: true}
