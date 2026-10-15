@@ -70,6 +70,26 @@ function requestPath(config: { url?: string }) {
     return String(config.url || "");
 }
 
+test("subtitle transcription forwards the selected Seal ASR route and preserves source timing", async () => {
+    const segments = [{ startMs: 420, endMs: 1930, text: "你好 Seal" }];
+    const task = generationTask({ id: "subtitle-route", type: "timeline_transcription", status: "succeeded", resultJson: JSON.stringify({ segments, language: "zh" }) });
+    const calls: string[] = [];
+    await withAdapter(async config => {
+        const path = requestPath(config);
+        calls.push(path);
+        if (path === "/timeline/transcriptions") {
+            const input = JSON.parse(String(config.data));
+            expect(input).toMatchObject({ resourceId: "source-audio", projectId: "canvas-a", route: "local", language: "zh", clientOperationId: "op-asr-route" });
+        } else expect(path).toBe("/tasks/subtitle-route");
+        return envelope(task);
+    }, async () => {
+        const session = beginLocalExecutorSession("canvas-a", { controller: new AbortController(), getLiveProjectId: () => "canvas-a" });
+        const result = await runOwnedTimelineTranscription({ session, resourceId: "source-audio", projectId: "canvas-a", route: "local", language: "zh", clientOperationId: "op-asr-route" });
+        expect(result.result.segments).toEqual(segments);
+    });
+    expect(calls).toEqual(["/timeline/transcriptions", "/tasks/subtitle-route"]);
+});
+
 function requestBody(config: { data?: unknown }) {
     if (typeof config.data === "string") {
         try {

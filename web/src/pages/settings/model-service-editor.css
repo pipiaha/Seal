@@ -42,6 +42,29 @@
 .model-service-manual { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin-top:14px; }
 .model-service-native-speech { margin-top:18px; padding-top:14px; border-top:1px solid var(--workspace-border); }
 .model-service-native-speech h3 { font-size:13px; margin:0 0 8px; font-weight:500; }
+.comfy-connection-check { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:4px 0 16px; }
+.comfy-connection-check > span { font-size:12px; color:var(--muted-foreground); }
+.comfy-connection-check .ant-alert { width:100%; }
+.comfy-workflow-picker { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-bottom:12px; }
+.comfy-workflow-picker .ant-select { flex:1; min-width:0; }
+.comfy-workflow-import { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; border-bottom:1px solid var(--workspace-border); }
+.comfy-workflow-import > div { min-width:0; }
+.comfy-workflow-import strong { display:block; font-size:13px; font-weight:500; overflow-wrap:anywhere; }
+.comfy-workflow-import small { display:block; margin-top:5px; font-size:12px; color:var(--muted-foreground); }
+.comfy-workflow-import p { margin:0; font-size:12px; line-height:1.7; color:var(--muted-foreground); }
+.comfy-workflow-import.is-empty { flex-direction:column; align-items:flex-start; gap:14px; padding:8px 0 20px; border-bottom:0; }
+.comfy-workflow-source-actions { display:flex; flex-wrap:wrap; gap:8px; flex-shrink:0; }
+.comfy-json-editor { display:grid; gap:10px; margin:12px 0; }
+.comfy-json-editor > label { font-size:13px; font-weight:500; }
+.comfy-json-editor textarea { font-family:var(--font-mono,monospace); font-size:12px; }
+.comfy-json-editor p { margin:0; font-size:12px; color:var(--muted-foreground); }
+.comfy-json-editor > div:last-child { display:flex; justify-content:flex-end; gap:8px; }
+.comfy-section-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.comfy-section-heading h4,.comfy-basic-parameters h4 { margin:0 0 10px; font-size:13px; font-weight:500; }
+.comfy-basic-parameters > div { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 16px; }
+.comfy-basic-parameters label { display:grid; gap:6px; font-size:12px; color:var(--muted-foreground); }
+.comfy-basic-parameters .ant-input-number { width:100%; }
+.comfy-workflow-advanced { margin-top:16px; padding-top:16px; border-top:1px solid var(--workspace-border); }
 @media(max-width:640px) {
  .model-service-modal .ant-modal-container { max-height:calc(100dvh - 24px); }
  .model-service-header,.model-service-fields,.model-service-models { padding:18px; }

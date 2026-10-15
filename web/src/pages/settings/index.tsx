@@ -11,7 +11,6 @@ import { ChannelSettingsPane, isChannelReady } from "./channel-settings-pane";
 import { ModelChannelDefaults } from "./model-channel-defaults";
 import { AsrSettingsPane } from "./asr-settings-pane";
 import { VoiceSettingsPane } from "./voice-settings-pane";
-import { AssistantToolsPane } from "./assistant-tools-pane";
 import { SearchSettingsPane } from "./search-settings-pane";
 import "./model-channel-settings.css";
 
@@ -91,7 +90,6 @@ export default function SettingsPage() {
                         <ModelChannelDefaults config={effectiveConfig} capability={category} onChange={(key, model) => updateConfig(key, model)} />
                         {category === "audio" && <VoiceSettingsPane />}
                         {customChannelsEnabled ? <ChannelSettingsPane key={category} capability={category} /> : <p className="mt-5 text-xs text-foreground/55">模型服务由系统管理，可在上方选择默认模型。</p>}
-                        {category === "text" && <AssistantToolsPane />}
                     </>}
                 </section>
             </div>

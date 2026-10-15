@@ -14,6 +14,6 @@ export function previewProviderScript(script: string, request: ProviderScriptSam
     return http.post<{ valid: boolean; create: Record<string, unknown>; poll?: Record<string, unknown>; result?: Record<string, unknown>; parsedResponse?: Record<string, unknown> }>("/workspace/providers/script/preview", { script, request, ...(response === undefined ? {} : { response }) });
 }
 
-export function inspectComfyUI(channel: ModelChannel) {
-    return http.post<{ stats: Record<string, unknown>; nodes: Record<string, unknown> }>("/workspace/providers/comfyui/inspect", { baseUrl: channel.baseUrl, apiKey: channel.apiKey, headers: channel.headers, authType: channel.authType || "none", authHeader: channel.authHeader });
+export function inspectComfyUI(channel: ModelChannel, signal?: AbortSignal) {
+    return http.post<{ stats: Record<string, unknown>; nodes: Record<string, unknown> }>("/workspace/providers/comfyui/inspect", { baseUrl: channel.baseUrl, apiKey: channel.apiKey, headers: channel.headers, authType: channel.authType || "none", authHeader: channel.authHeader }, { signal, timeout: 20_000 });
 }

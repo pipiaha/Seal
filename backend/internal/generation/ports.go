@@ -2,6 +2,7 @@ package generation
 
 import (
 	"context"
+	"infinite-canvas/backend/internal/outbound"
 	"infinite-canvas/backend/internal/provider/workflow"
 	"io"
 	"net/http"
@@ -144,7 +145,13 @@ type CallMeta struct {
 	ConcurrencyLimit  int
 }
 
+type DeliveryProgressPort interface {
+	ReportDelivery(progress outbound.ResumableProgress)
+	ClearDelivery()
+}
+
 type Runtime struct {
+	Delivery   DeliveryProgressPort
 	Submission workflow.Receipt
 	Resources  ResourcePort
 	Limits     LimitsPort

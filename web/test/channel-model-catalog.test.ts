@@ -264,7 +264,7 @@ describe("public channel model catalog", () => {
             catalog: [{ id: "seedance-2.5", displayName: "Seedance 2.5", modelType: "video", supportedEndpointTypes: ["openai"] }],
         });
 
-        expect(next.models).toEqual(["seedance-2.5"]);
+        expect(next.models).toEqual(["old-model"]);
         expect(next.modelProfiles).toEqual([expect.objectContaining({ model: "seedance-2.5", capability: "video" })]);
     });
 

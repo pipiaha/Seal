@@ -316,7 +316,13 @@ func DoBinaryWithConsumer(req *http.Request, onChunk func(string, []byte)) (resp
 	}
 	mimeType := resp.Header.Get("Content-Type")
 	var buffered bytes.Buffer
-	reader := io.LimitReader(resp.Body, responseLimit+1)
+	body := io.Reader(resp.Body)
+	if observe := downloadObserverFrom(req.Context()); observe != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// Start transfer timing after headers arrive; an error response is not media.
+		observe(0, resp.ContentLength)
+		body = newProgressReader(resp.Body, resp.ContentLength, responseLimit, observe)
+	}
+	reader := io.LimitReader(body, responseLimit+1)
 	chunk := make([]byte, 32<<10)
 	for {
 		readCount, readErr := reader.Read(chunk)

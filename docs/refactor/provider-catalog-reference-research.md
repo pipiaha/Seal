@@ -1,0 +1,49 @@
+# 供应商预设与模型目录：CC Switch / Magpie 源码核对
+
+## 结论
+
+这两个项目都仍有**静态供应商预设**，不能称为动态供应商目录。值得 Seal 参考的是把预设当连接模板，并另设模型发现、手工选择与资料补全机制。CC Switch 偏向表单中的手动拉取；Magpie 还提供持久化的上游模型列表及可选定时更新。models.dev 是公共模型资料来源，不能证明当前用户、API Key、套餐或本机拥有这些模型。[CC Switch 预设](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/config/codexProviderPresets.ts#L135)、[Magpie 预设](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/presets.go#L115)、[Magpie 上游优先逻辑](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L48)。
+
+对 ComfyUI 的借鉴应是**读取当前连接实例的目录与节点 schema**，不是套用这两个项目的 LLM 名单。此次检查的 CC Switch 预设和模型获取服务中没有发现 ComfyUI 目录适配；因此这些源码不能作为 ComfyUI checkpoint、LoRA 或节点枚举已经得到支持的证据。Seal 本地问题和 ComfyUI 接口方案另见 [seal-provider-model-discovery-proposal.md](./seal-provider-model-discovery-proposal.md)。
+
+## 核对范围与版本
+
+- CC Switch：官方仓库 `farion1231/cc-switch`，实际检出 commit [`51ac86f1c59abfefabadebd05ec5a5415b8ad72c`](https://github.com/farion1231/cc-switch/commit/51ac86f1c59abfefabadebd05ec5a5415b8ad72c)。
+- Magpie：官方仓库 `yetone/magpie`，实际检出 commit [`0c1e9b79d33e0d05b968cd31f2708340c1f2edea`](https://github.com/yetone/magpie/commit/0c1e9b79d33e0d05b968cd31f2708340c1f2edea)。查询远程 HEAD 时为 `ce5d9f9d4e24a30944ccdf6462613efeec2ca1cb`，克隆完成时已有推进；以下引用统一固定到实际检出的 commit。
+- 通过官方 Git 仓库源码检出、搜索与调用链阅读核对；克隆放在 Git 忽略的本地缓存。没有运行项目、真实认证、收费模型请求、部署或创建 PR。
+
+## CC Switch 实际策略
+
+| 层次 | 实际实现 | 来源 |
+| --- | --- | --- |
+| 供应商预设 | `src/config/*ProviderPresets.ts` 是源码数组，包含 URL、协议、默认模型、部分 `modelCatalog` / 模型变体。`generateThirdPartyConfig` 也有固定默认模型。新模型不会仅因上游发布就自动写进这些数组。 | [Codex 预设与默认值](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/config/codexProviderPresets.ts#L68)、[OpenCode 模型变体](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/config/opencodeProviderPresets.ts#L41) |
+| 上游模型拉取 | 表单调用 `fetchModelsForConfig`，Tauri 命令转给 Rust `fetch_models`。有 `models_url` 时精确使用它；否则生成 `/v1/models`、版本路径下 `/models`，以及剥离已知 Anthropic 兼容子路径的候选。404/405 尝试下一候选，其他失败返回错误；15 秒请求超时。解析 `data[].id` 或 `models[].slug/id`。 | [命令](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src-tauri/src/commands/model_fetch.rs#L95)、[服务](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src-tauri/src/services/model_fetch.rs#L83)、[候选 URL](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src-tauri/src/services/model_fetch.rs#L241) |
+| 协议与凭证 | 获取服务支持 Bearer、`x-api-key`、`x-goog-api-key` 以及自定义请求头。Claude 表单在地址仍匹配预设时可使用预设的 `modelsUrl`。这只是已有列表接口的客户端能力，不保证每个供应商都实现该接口。 | [认证头](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src-tauri/src/services/model_fetch.rs#L175)、[Claude 表单](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/ClaudeFormFields.tsx#L320) |
+| 手工选择 | 拉取名单作为可搜索下拉/选择弹窗；输入框仍允许直接键入模型 ID。OpenCode 表单也能添加空模型行并编辑，不把列表当成唯一允许集。 | [可编辑输入](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/shared/ModelInputWithFetch.tsx#L31)、[OpenCode 添加与补全](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/OpenCodeFormFields.tsx#L308) |
+| 拉取名单缓存 | 核对的 OpenCode 表单把名单存 React `useState`，地址、密钥、headers 变化时清空，并忽略旧请求响应；服务每次被调用都发 HTTP 请求。没有在这条通用链中发现定期同步全部预设模型名单的机制。 | [表单状态与拉取](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/OpenCodeFormFields.tsx#L229) |
+| models.dev 元数据 | 从 `https://models.dev/api.json` 读取，React Query 共用 `models-dev` 查询，`staleTime` 和 `gcTime` 都为 1 小时，15 秒超时。模型选择后的补全从同地址预设与 models.dev 取资料，只填空字段；网络失败保留已补的预设值。不是用公共目录替换上游返回名单。 | [查询与缓存](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/lib/modelsDev.ts#L6)、[补全 hook](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/hooks/useModelMetadataFill.ts#L17) |
+| models.dev 价格更新 | `syncModelsDevPricing` 针对选中价格条目。启用自动同步后，应用启动检查，距离上次同步不足 6 小时则跳过；界面“立即同步”可 force。它更新价格及同步记录，不能描述为“供应商可用模型自动发现”。 | [同步逻辑](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/lib/modelsDevAutoSync.ts#L21)、[启动调用](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/main.tsx#L152)、[手动 force](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/usage/ModelsDevAutoSyncPanel.tsx#L483) |
+
+已直接找到通用远端拉取入口的表单包括 [Claude](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/ClaudeFormFields.tsx#L320)、[Codex](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/CodexFormFields.tsx#L794)、[OpenCode](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/OpenCodeFormFields.tsx#L242)、[Pi](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/PiProviderForm.tsx#L1054)、[Gemini](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/GeminiFormFields.tsx#L79)、[Hermes](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/HermesFormFields.tsx#L143)、[OpenClaw](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src/components/providers/forms/OpenClawFormFields.tsx#L126)。这些是目标工具的配置表单名，不能据此推断所有同名原厂 API 都能被通用解析器识别。OAuth / CLI 还有专门路径，例如执行 `opencode models` 读取工具当前运行时目录。[OpenCode 命令入口](https://github.com/farion1231/cc-switch/blob/51ac86f1c59abfefabadebd05ec5a5415b8ad72c/src-tauri/src/commands/model_fetch.rs#L19)。
+
+## Magpie 实际策略
+
+| 层次 | 实际实现 | 来源 |
+| --- | --- | --- |
+| 供应商预设 | `PresetDef` / `presets` 仍是代码内置模板：URL、协议、公共目录 ID、区域和部分固定 Models。`NoList` 明确表示不能请求目录，使用预设名单；例如 Vertex AI、Bedrock 类型的情况。 | [预设结构](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/presets.go#L23)、[静态列表](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/presets.go#L115) |
+| 名单来源优先级 | `Provider.available()` 先构造账号/公共目录资料；有已拉取 live 列表时返回 live，并用 `catalog.Decorate(live, known)` 补资料，不把公共目录的所有 ID 并进上游名单。没有 live 时可回退账号列表、models.dev 或计划内置名单。 | [Available / available](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L29) |
+| 实时拉取 | `Provider.List` 用于未保存表单，只请求不落盘；`Fetch` / `Refetch` 用于已保存供应商，拉取并保存。用户可给精确 `ModelsURL`，否则按实际协议端点获取，包括独立 Gemini 路径；多协议合并并保留失败端点上次名单。 | [List](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L345)、[fetchOne](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L610)、[列表 HTTP](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/live.go#L196) |
+| 上游名单持久缓存 | 每个供应商存在应用缓存下 `models/{provider}.json`，保存 `fetched`、`base`、`models` 及可选分端点 `sides`。它与公共目录缓存 `models.json` 是两个不同层次。 | [LivePath 与结构](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/live.go#L28)、[SaveLiveSides](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/live.go#L142) |
+| 用户选择与手填 | `Exposed` 决定向 Agent 暴露的模型，优先用户选择；手填而目录未列出的 ID 也能构造模型条目。没有用户选择时，少量名单全部暴露，大名单截取前 24 项。刷新移除上次确实列出、这次已消失的选择，纯手填选择继续保留；失败/空名单不触发移除。 | [Exposed](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L1334)、[Refetch 语义](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/models.go#L188) |
+| 公共目录缓存 | 优先应用缓存的 `models.json`，其次 `~/.cache/opencode/models.json`；`Sync` 下载 models.dev、检查 JSON 后写缓存、清内存索引并通知目录变化。 | [CachePath / Source / load](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/catalog.go#L460)、[Sync](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/catalog.go#L620) |
+| 公共目录自动更新 | `KeepFresh` 启动及每小时检查一次，缓存超过 24 小时则刷新；缺少价格时，若缓存与上次尝试都已超过 6 小时，可后台补刷。此缺价机制仅在已启动 KeepFresh 的长期进程生效。GUI 和 `serve` 有实际调用。 | [fresh.go](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/catalog/fresh.go#L17)、[GUI](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/gui/backend.go#L64)、[serve](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/cli/providers_cli.go#L1210) |
+| 上游名单自动更新 | 用户自定义供应商可选 `RefreshEvery`，最短 10 分钟，默认 0 表示仅请求时更新。运行网关每分钟检查到期项，失败重试间隔为 `min(用户间隔, 15分钟)`；`AutoInclude` 可按模式纳入首次出现的新 ID，已手动取消的旧 ID 不会每次再自动勾回。账号与插件有自己的获取机制。 | [autolist.go](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/autolist.go#L3)、[KeepListsFresh](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/provider/autolist.go#L239)、[网关启动](https://github.com/yetone/magpie/blob/0c1e9b79d33e0d05b968cd31f2708340c1f2edea/internal/gateway/gateway.go#L502) |
+
+## Seal 可以采用的边界（基于上述代码的设计推论）
+
+1. 保留供应商连接预设，明确其用途是初始化协议、地址与推荐值；模型列表另存来源、刷新时间和错误，不把推荐 ID 当实际能力。
+2. 对具有真实列表接口的协议开放“获取模型”，对无目录接口的服务保留手填。公共目录只补名称、上下文、模态和价格，界面标明其来源。
+3. 保留已选择及手填模型；刷新失败继续展示上次成功目录并告知旧时间；新名单变化与用户选择是两个独立状态。
+4. ComfyUI 目录应按实例获取，并进入工作流节点配置：实际 checkpoint / LoRA 等文件、节点支持的输入类型与枚举属于实例能力。`comfyui-image` / `comfyui-video` 可以作为服务/任务类别，却不能充当已发现的安装模型名单。
+
+以上是设计建议，不是 Seal 已实施或已通过运行验证的结论。上游 `/models` 返回也仅证明其声明的目录，仍可能受套餐、路由、权限、地区或临时可用性影响；本次没有用真实账户验证。

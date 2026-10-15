@@ -4,6 +4,8 @@ import { readAxiosError, validateGeminiPayload } from "@/services/api/image-resp
 import { geminiApiUrl, geminiHeaders } from "@/services/api/image-transport";
 import { ApiError, http } from "@/services/api/request";
 import { buildApiUrl, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { saveChannelCatalogCache } from "@/services/channel-model-catalog-cache";
+import { captureUserScopeEpoch, userScopeEpochMatches } from "@/lib/user-scope";
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {
     baseUrl: "https://generativelanguage.googleapis.com",
@@ -59,13 +61,26 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
     }
 }
 
-export type ChannelModelFetchResult = { models: string[]; catalog: ChannelModelCatalogItem[] };
+export type ChannelModelFetchResult = { models: string[]; catalog: ChannelModelCatalogItem[]; fetchedAt?: number; cacheWarning?: string };
 
 export async function fetchChannelModels(channel: ModelChannel, viaBackend = false): Promise<ChannelModelFetchResult> {
+    const epoch = captureUserScopeEpoch();
+    const fetchedAt = Date.now();
+    const result = await loadChannelModels(channel, viaBackend);
+    if (!userScopeEpochMatches(epoch)) throw new Error("工作区已切换，已忽略模型目录结果");
+    try { await saveChannelCatalogCache(channel, result.catalog, fetchedAt); }
+    catch { result.cacheWarning = "目录已读取，但本地缓存未保存；重新打开后可再次刷新"; }
+    if (!userScopeEpochMatches(epoch)) throw new Error("工作区已切换，已忽略模型目录结果");
+    return { ...result, fetchedAt };
+}
+
+async function loadChannelModels(channel: ModelChannel, viaBackend: boolean): Promise<ChannelModelFetchResult> {
     const managed = channel.id === "beefapi" && (channel.pinned || Boolean(channel.credentialRef));
     if (managed) {
         viaBackend = true;
     }
+    // Native listing, custom endpoints and non-Bearer auth use the backend adapter.
+    if (channel.apiFormat === "claude" || channel.modelsUrl || channel.authType === "none" || channel.authType === "header") viaBackend = true;
     if (!viaBackend) {
         if (channel.apiFormat !== "gemini") {
             const catalog = await fetchOpenAIModelCatalog(channel);
@@ -80,6 +95,9 @@ export async function fetchChannelModels(channel: ModelChannel, viaBackend = fal
             baseUrl: channel.baseUrl,
             apiKey: managed ? "" : channel.apiKey,
             apiFormat: channel.apiFormat,
+            modelsUrl: channel.modelsUrl,
+            authType: channel.authType,
+            authHeader: channel.authHeader,
             headers: channel.headers,
             channelId: managed ? channel.id : undefined,
             credentialRef: managed ? "beefapi-enterprise" : undefined,

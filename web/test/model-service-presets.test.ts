@@ -7,11 +7,34 @@ import { configWithoutCachedSecrets, createModelChannel, defaultConfig } from ".
 import { defaultModelCapabilityConfig } from "../src/lib/model-capabilities";
 import type { ModelProtocolDefinition } from "../src/lib/model-protocols";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "../src/stores/use-model-connection-tests";
+import { catalogWithSavedModels, discoveredModelCapability, modelAbsentFromCatalog } from "../src/lib/channel-model-discovery";
 
 const protocols = [
     ["chat-completion", "text"], ["gemini-generate-content", "text"], ["gemini-image", "image"],
     ["volcengine-ark-video", "video"], ["newapi", "video"],
 ].map(([value, capability]) => ({ value, capability, enabled: true } as ModelProtocolDefinition));
+
+test("catalog discovery retains manual selection, exposes unknown models and marks removed IDs", () => {
+    const channel = createModelChannel({ models: ["manual", "removed"], modelProfiles: [{ model: "manual", capability: "image", protocol: "openai-image" }] });
+    const snapshot = { catalog: [{ id: "opaque-new" }], fetchedAt: Date.now(), seenIds: ["removed", "opaque-new"] };
+    expect(catalogWithSavedModels(channel, snapshot).map(item => item.id)).toEqual(["opaque-new", "manual", "removed"]);
+    expect(discoveredModelCapability(channel, { id: "opaque-new" })).toBeUndefined();
+    expect(modelAbsentFromCatalog("manual", snapshot)).toBe(false);
+    expect(modelAbsentFromCatalog("removed", snapshot)).toBe(true);
+    const empty = applyFetchedChannelModelCatalog(createModelChannel({ models: [] }), { models: ["new"], catalog: [{ id: "new", modelType: "text" }] });
+    expect(empty.models).toEqual([]);
+});
+
+test("native Anthropic discovery works on custom hosts and custom directory endpoints unlock manual presets", () => {
+    const channel = createModelChannel({ baseUrl: "https://custom.example", apiFormat: "claude", apiKey: "test-only" });
+    expect(serviceSupportsModelCatalog(channel, "text")).toBe(true);
+    expect(modelCatalogRequestURL(channel)).toBe("https://custom.example/v1/models");
+    expect(serviceModelProfile(channel, { id: "claude-new", modelType: "text" }, [{ value: "claude-api", capability: "text", enabled: true } as ModelProtocolDefinition]).protocol).toBe("claude-api");
+    const bailian = createModelChannel({ baseUrl: "https://dashscope.aliyuncs.com", modelsUrl: "/custom-models" });
+    expect(serviceSupportsModelCatalog(bailian, "video")).toBe(true);
+    expect(modelCatalogRequestURL(bailian)).toBe("https://dashscope.aliyuncs.com/custom-models");
+    expect(serviceConnectionError({ ...bailian, modelsUrl: "https://other.example/models" })).toContain("同站点");
+});
 
 test("supplier presets are category-specific and Bailian text does not use its native media endpoint", () => {
     expect(modelServicePresetsFor("text").map(p => p.name)).toContain("火山方舟");
@@ -32,7 +55,7 @@ test("Agnes defaults to the domestic API and recognizes both sites without chang
         for (const baseUrl of ["https://api.agnes-ai.cn/v1", "https://api.agnes-ai.cn", "https://apihub.agnes-ai.com/v1"]) {
             const channel = createModelChannel({ baseUrl, apiKey: "synthetic-key" });
             expect(servicePresetFor(channel)).toBe("agnes");
-            expect(serviceSupportsModelCatalog(channel, capability)).toBe(false);
+            expect(serviceSupportsModelCatalog(channel, capability)).toBe(true);
             expect(serviceModelProfile(channel, { id: `agnes-${capability}-2.5-flash` }, installed, capability).protocol).toBe(`agnes-${capability}`);
             expect(channel.baseUrl).toBe(baseUrl);
         }

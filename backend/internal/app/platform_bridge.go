@@ -199,6 +199,7 @@ func (s *Service) RecordChannelResult(ctx context.Context, channelID string, fai
 
 func (s *Service) Close() error {
 	s.StopAssistantWorkspace()
+	s.stopGenerationDownloads()
 	return nil
 }
 

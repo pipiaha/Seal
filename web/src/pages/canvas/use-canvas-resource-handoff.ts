@@ -8,10 +8,10 @@ import { resolveProjectCanvasStyle } from "@/components/canvas/canvas-style-pick
 import { refreshCanvasCharacterReferenceNodes } from "@/lib/canvas/canvas-character-reference";
 import { canvasAssetHandoffIds, consumeCanvasAssetHandoff } from "@/lib/canvas/canvas-asset-handoff";
 import { createCanvasNode } from "@/lib/canvas/canvas-project-domain";
-import { isUserScopeAbandonedError } from "@/lib/user-scope-guard";
+import { captureUserScope, isUserScopeAbandonedError } from "@/lib/user-scope-guard";
 import { createStyleProfileSnapshot, resolveStyleProfile, serializeStyleProfile } from "@/lib/canvas/style-profile";
 import { getProject } from "@/services/api/projects";
-import { queryGenerationTask, type GenerationTask } from "@/services/api/task-center";
+import { queryGenerationTask, retryGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { loadAssetsForUse } from "@/services/local-workspace-sync";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
@@ -22,6 +22,7 @@ import { CanvasNodeType, type CanvasNodeData, type Position } from "@/types/canv
 
 import { readOwnedCanvasNodes, runOwnedCanvasEnsureQueue, runOwnedCanvasPageCommit, useCanvasOwnerLifetime } from "./canvas-owner-epoch";
 import { applyArchivedCanvasNodeAssets, CANVAS_HANDOFF_PERSIST_FAILED_MESSAGE, commitOwnedCanvasAssetHandoff, rebaseCreatedCanvasNodes } from "./canvas-resource-handoff-commit";
+import { canvasGenerationFailureMetadata } from "./canvas-generation-failure";
 import { linkedFolderPresentation, planCanvasHandoffEffect, resolveCanvasAssetHandoffPlan } from "./canvas-resource-handoff-plan";
 
 const NODE_STATUS_SUCCESS = "success" as const;
@@ -292,22 +293,27 @@ export function useCanvasResourceHandoff({
         async (node: CanvasNodeData) => {
             const taskId = node.metadata?.taskId;
             if (!taskId || !node.metadata?.resourceReloadAvailable) return;
-            if (isLocalWorkspaceMode() || import.meta.env.VITE_CANVAS_LOCAL_MODE !== "false") {
-                message.info("本地工作区不会从云端重新加载任务资源，请直接在画布中重新生成");
-                return;
-            }
             const owner = lifetime.capture(projectId);
             const targetNodeId = node.id;
-            setNodes((current) => current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "loading", taskStage: "正在重新加载资源", errorDetails: undefined } } : item)));
+            const expectedScope = captureUserScope();
+            // 继续取回只等待并绑定原任务已生成的结果，不会重新提交生成。
+            // 等待期间节点显示取回进度；失败后仍保留「继续取回」。
+            setNodes((current) =>
+                current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "loading", errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined } } : item)),
+            );
             try {
-                const task = await queryGenerationTask(taskId);
+                let task = await queryGenerationTask(taskId, { expectedScope });
                 if (!lifetime.matches(owner, projectIdRef.current)) return;
-                if (task.status !== "succeeded") throw new Error("原生成任务尚未成功，无法重新加载资源");
+                if (task.status !== "succeeded") throw new Error("原生成任务尚未成功，暂时无法取回结果");
+                if (task.stage === "delivery_paused" || task.stage === "delivery_timed_out") {
+                    task = await retryGenerationTask(taskId, expectedScope);
+                    if (!lifetime.matches(owner, projectIdRef.current)) return;
+                }
                 await applyGenerationTaskResult(targetNodeId, task);
             } catch (error) {
                 if (!lifetime.matches(owner, projectIdRef.current)) return;
                 setNodes((current) =>
-                    current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "error", errorDetails: error instanceof Error ? error.message : "资源重新加载失败", resourceReloadAvailable: true } } : item)),
+                    current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "error", ...canvasGenerationFailureMetadata(error, { prompt: item.metadata?.prompt || "" }), resourceReloadAvailable: true } } : item)),
                 );
             }
         },

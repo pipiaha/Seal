@@ -65,6 +65,8 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const pendingSelectionRef = useRef<number | null>(null);
     const pendingScrollTopRef = useRef<number | null>(null);
     const lastRenderedValueRef = useRef("");
+    const interactingWithMenuRef = useRef(false);
+    const interactingTimerRef = useRef<number | null>(null);
     const [mention, setMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(-1);
     const [autoLinkCursor, setAutoLinkCursor] = useState<number | null>(null);
@@ -72,6 +74,44 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const [autoLinkPosition, setAutoLinkPosition] = useState<{ left: number; top: number } | null>(null);
     const [nativeDropReferenceId, setNativeDropReferenceId] = useState<string | null>(null);
     const [previewReference, setPreviewReference] = useState<CanvasResourceReference | null>(null);
+
+    useLayoutEffect(() => {
+        const handleGlobalPointerDown = (event: globalThis.PointerEvent) => {
+            const target = event.target;
+            const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+            const isInsideMenu = (
+                (target instanceof Element && Boolean(target.closest("[data-canvas-resource-mention-menu]"))) ||
+                path.some((el) => el instanceof Element && el.hasAttribute("data-canvas-resource-mention-menu"))
+            );
+            if (isInsideMenu) {
+                if (interactingTimerRef.current !== null) {
+                    window.clearTimeout(interactingTimerRef.current);
+                    interactingTimerRef.current = null;
+                }
+                interactingWithMenuRef.current = true;
+            }
+        };
+        const handleGlobalPointerUp = () => {
+            if (interactingWithMenuRef.current) {
+                if (interactingTimerRef.current !== null) {
+                    window.clearTimeout(interactingTimerRef.current);
+                }
+                interactingTimerRef.current = window.setTimeout(() => {
+                    interactingWithMenuRef.current = false;
+                    interactingTimerRef.current = null;
+                }, 240);
+            }
+        };
+        window.addEventListener("pointerdown", handleGlobalPointerDown, true);
+        window.addEventListener("pointerup", handleGlobalPointerUp, true);
+        return () => {
+            window.removeEventListener("pointerdown", handleGlobalPointerDown, true);
+            window.removeEventListener("pointerup", handleGlobalPointerUp, true);
+            if (interactingTimerRef.current !== null) {
+                window.clearTimeout(interactingTimerRef.current);
+            }
+        };
+    }, []);
     const canvasReferences = useResolvedCanvasResourceReferences(references);
     const rawAssetReferences = useMemo(() => includeAssetLibrary ? buildAssetMentionReferences(assets) : [], [assets, includeAssetLibrary]);
     const assetReferences = useResolvedCanvasResourceReferences(rawAssetReferences);
@@ -268,7 +308,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             data-canvas-no-zoom
             className="fixed z-[var(--z-tooltip)] inline-flex max-w-[min(360px,calc(100vw-24px))] items-center gap-1.5 rounded-md border border-current/15 px-2 py-1 text-[var(--fs-micro)] shadow-sm"
             style={{ ...autoLinkPosition, visibility: autoLinkPosition ? "visible" : "hidden", background: theme.node.panel, color: theme.node.text }}
-            onPointerDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
             onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
             onClick={(event) => { event.stopPropagation(); insertAutoLink(autoLinkMatch); }}
             aria-label={`引用${autoLinkMatch.reference.label}`}
@@ -321,6 +361,13 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         caretColor: style?.color || theme.node.text,
     } as CSSProperties;
     const menuAnchor = useRichEditor ? editorRef.current : textareaRef.current;
+    const handleMenuNavigate = (direction: "up" | "down") => {
+        if (!candidates.length) return;
+        setActiveIndex((index) => {
+            if (direction === "down") return index < 0 ? 0 : (index + 1) % candidates.length;
+            return index < 0 ? candidates.length - 1 : (index - 1 + candidates.length) % candidates.length;
+        });
+    };
     const menu = mention && availableReferences.length && menuAnchor ? (
         <MentionMenu
             anchor={menuAnchor}
@@ -332,9 +379,13 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             cursorOffset={mention.end}
             activeReferenceId={activeIndex >= 0 ? candidates[Math.min(activeIndex, candidates.length - 1)]?.id : undefined}
             preferredWidth={mentionMenuWidth}
-            onQueryChange={(query) => setMention((current) => current ? { ...current, query } : current)}
+            onQueryChange={(query) => {
+                setMention((current) => current ? { ...current, query } : current);
+                setActiveIndex(-1);
+            }}
             onClose={closeMention}
             onSelect={insertReference}
+            onNavigate={handleMenuNavigate}
         />
     ) : null;
 
@@ -470,8 +521,10 @@ if (event.key === "Enter" && (event.nativeEvent.isComposing || composingRef.curr
                     onFocus={(event) => props.onFocus?.(event as unknown as React.FocusEvent<HTMLTextAreaElement>)}
                     onBlur={(event) => {
                         setAutoLinkCursor(null);
+                        if (interactingWithMenuRef.current) return;
                         if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-canvas-resource-mention-menu]")) return;
                         window.setTimeout(() => {
+                            if (interactingWithMenuRef.current) return;
                             if (document.activeElement?.closest("[data-canvas-resource-mention-menu]")) return;
                             closeMention();
                         }, 120);
@@ -537,7 +590,7 @@ if (event.key === "Enter" && (event.nativeEvent.isComposing || composingRef.curr
                             setActiveIndex((index) => index < 0 ? candidates.length - 1 : (index - 1 + candidates.length) % candidates.length);
                             return;
                         }
-                        if (event.key === "Enter") {
+                        if (event.key === "Enter" || event.key === "Tab") {
                             event.preventDefault();
                             insertReference(candidates[activeIndex < 0 ? 0 : Math.min(activeIndex, candidates.length - 1)]);
                             return;
@@ -569,8 +622,10 @@ if (event.key === "Enter" && (event.nativeEvent.isComposing || composingRef.curr
                 }}
                 onBlur={(event) => {
                     setAutoLinkCursor(null);
+                    if (interactingWithMenuRef.current) return;
                     if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-canvas-resource-mention-menu]")) return;
                     window.setTimeout(() => {
+                        if (interactingWithMenuRef.current) return;
                         if (document.activeElement?.closest("[data-canvas-resource-mention-menu]")) return;
                         closeMention();
                     }, 120);
@@ -683,7 +738,7 @@ function syncInlineMentionPreviews(editor: HTMLElement, references: CanvasResour
     });
 }
 
-function MentionMenu({ anchor, connectedReferences, referencesLabel, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect }: {
+function MentionMenu({ anchor, connectedReferences, referencesLabel, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect, onNavigate }: {
     anchor: HTMLElement;
     connectedReferences: CanvasResourceReference[];
     referencesLabel: string;
@@ -696,6 +751,7 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
     onQueryChange: (query: string) => void;
     onClose: () => void;
     onSelect: (reference: CanvasResourceReference) => void;
+    onNavigate?: (direction: "up" | "down") => void;
 }) {
     const menuRef = useRef<HTMLDivElement | null>(null);
     const selectedRef = useRef(false);
@@ -723,6 +779,10 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
 
     const stopCanvasInteraction = (event: PointerEvent | MouseEvent) => {
         event.stopPropagation();
+        const target = event.target as HTMLElement | null;
+        if (target?.tagName !== "INPUT") {
+            event.preventDefault();
+        }
     };
     const selectReference = (reference: CanvasResourceReference) => {
         if (selectedRef.current) return;
@@ -743,7 +803,17 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
     useLayoutEffect(() => {
         const closeOnOutsidePointer = (event: globalThis.PointerEvent) => {
             const target = event.target;
-            if (!(target instanceof Node) || menuRef.current?.contains(target) || anchor.contains(target)) return;
+            const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+            const isInsideMenu = Boolean(
+                (target instanceof Node && menuRef.current?.contains(target)) ||
+                (menuRef.current && path.includes(menuRef.current)) ||
+                (target instanceof Element && Boolean(target.closest("[data-canvas-resource-mention-menu]")))
+            );
+            const isInsideAnchor = Boolean(
+                (target instanceof Node && anchor.contains(target)) ||
+                path.includes(anchor)
+            );
+            if (isInsideMenu || isInsideAnchor) return;
             onClose();
         };
         window.addEventListener("pointerdown", closeOnOutsidePointer, true);
@@ -769,6 +839,7 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
                     aria-label="搜索引用素材"
                     onChange={(event) => onQueryChange(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.stopPropagation()}
                     onKeyDown={(event) => {
                         if (event.key === "Escape") {
                             event.preventDefault();
@@ -776,9 +847,20 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
                             anchor.focus();
                             return;
                         }
-                        if (event.key === "Enter" && filteredReferences.length) {
+                        if (event.key === "ArrowDown") {
                             event.preventDefault();
-                            selectReference(filteredReferences[0]);
+                            onNavigate?.("down");
+                            return;
+                        }
+                        if (event.key === "ArrowUp") {
+                            event.preventDefault();
+                            onNavigate?.("up");
+                            return;
+                        }
+                        if ((event.key === "Enter" || event.key === "Tab") && filteredReferences.length) {
+                            event.preventDefault();
+                            const active = filteredReferences.find((item) => item.id === activeReferenceId);
+                            selectReference(active || filteredReferences[0]);
                         }
                     }}
                 />
@@ -788,7 +870,19 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
                     <MentionReferenceList references={visibleReferences} activeReferenceId={activeReferenceId} onSelect={selectReference} />
                 ) : category ? (
                     <>
-                        <button type="button" className="canvas-resource-mention-back" onClick={() => setCategory(null)}>
+                        <button
+                            type="button"
+                            className="canvas-resource-mention-back"
+                            onPointerDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                            }}
+                            onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setCategory(null);
+                            }}
+                        >
                             <ArrowLeft aria-hidden />
                             <span>{ASSET_CATEGORY_LABELS[category]}</span>
                             <small>{visibleReferences.length}</small>
@@ -813,7 +907,20 @@ function MentionMenu({ anchor, connectedReferences, referencesLabel, assetRefere
                             <section className="canvas-resource-mention-section">
                                 <h4><span>素材库</span><small>{assetReferences.length}</small></h4>
                                 {categoryItems.map((item) => (
-                                    <button key={item.value} type="button" className="canvas-resource-mention-folder" onClick={() => setCategory(item.value)}>
+                                    <button
+                                        key={item.value}
+                                        type="button"
+                                        className="canvas-resource-mention-folder"
+                                        onPointerDown={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                        }}
+                                        onClick={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            setCategory(item.value);
+                                        }}
+                                    >
                                         <Folder aria-hidden />
                                         <span>{item.label}</span>
                                         <small>{item.count}</small>
@@ -841,7 +948,6 @@ function MentionReferenceList({ references, activeReferenceId, onSelect }: { ref
             onPointerDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                onSelect(reference);
             }}
             onClick={(event) => {
                 event.preventDefault();

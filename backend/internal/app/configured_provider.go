@@ -3,6 +3,10 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"time"
 
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/protocol"
@@ -40,5 +44,26 @@ func (s *Service) InspectLocalComfyUI(ctx context.Context, config generation.Con
 	if err != nil {
 		return nil, BadAuthRequest(err.Error())
 	}
-	return generation.InspectComfyUI(ctx, resolved)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	result, err := generation.InspectComfyUI(ctx, resolved)
+	if err == nil {
+		return result, nil
+	}
+	var httpErr generation.HTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return nil, WrapAppError(http.StatusBadGateway, "ComfyUI 鉴权失败，请检查连接选项中的密钥", err)
+		case http.StatusNotFound:
+			return nil, WrapAppError(http.StatusBadGateway, "此地址未提供 ComfyUI 接口，请检查服务地址", err)
+		default:
+			return nil, WrapAppError(http.StatusBadGateway, "ComfyUI 服务返回错误，请检查服务运行状态", err)
+		}
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout() {
+		return nil, WrapAppError(http.StatusGatewayTimeout, "连接 ComfyUI 超时，请检查服务是否正常运行", err)
+	}
+	return nil, WrapAppError(http.StatusBadGateway, "无法连接 ComfyUI，请确认已启动，并检查服务地址与端口", err)
 }

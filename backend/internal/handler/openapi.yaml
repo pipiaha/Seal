@@ -28,6 +28,43 @@ tags:
   - name: assistant
   - name: creation-conversations
 paths:
+  /ai/models:
+    post:
+      tags: [meta]
+      summary: 读取用户渠道的供应商模型目录
+      description: 只读操作。模型目录地址必须与服务同站点。原生分页最多 20 页，总时间 25 秒；每个用户每分钟最多 30 次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseUrl]
+              properties:
+                baseUrl: { type: string }
+                apiKey: { type: string, writeOnly: true }
+                apiFormat: { type: string, enum: [openai, gemini, claude], default: openai }
+                modelsUrl: { type: string, description: 可选的同站点目录路径或完整 URL }
+                authType: { type: string, enum: [none, bearer, header], default: bearer }
+                authHeader: { type: string }
+                headers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      value: { type: string, writeOnly: true }
+      responses:
+        '200':
+          description: 标准信封，data.models 为供应商模型条目数组；可为空。
+        '400':
+          description: 地址、鉴权、目录协议或响应格式无效。
+        '401':
+          description: 未登录。
+        '429':
+          description: 目录读取过于频繁。
+        '502':
+          description: 上游鉴权、目录支持或网络错误。
   /assistant/projects/{projectId}/providers/read:
     post:
       tags: [assistant]
@@ -584,41 +621,6 @@ paths:
           description: 信封 data 包含 currentRevision 和 snapshots；每项含 id、revision、title、nodeCount、connectionCount、payloadBytes、reason、contentUpdatedAt、createdAt，不含正文
         "404":
           description: 画布不存在或无权访问
-  /canvas-projects/{id}/generated-assets:
-    put:
-      tags: [canvas]
-      summary: 原子发布生成素材与画布结果
-      description: 按 Resource 精确绑定候选 Asset，并在同一数据库事务中保存 Asset、画布和历史快照；任一步失败均不产生半提交。
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [project, assets]
-              properties:
-                project:
-                  type: object
-                  required: [id, revision]
-                  additionalProperties: true
-                assets:
-                  type: array
-                  items:
-                    type: object
-                    required: [id, kind, data]
-                    additionalProperties: true
-      responses:
-        "200":
-          description: 信封 data.project 返回递增后的画布 revision
-        "400":
-          description: 素材、Resource 或画布引用不合法
-        "409":
-          description: 画布 revision 冲突，Asset 与画布均未提交
   /canvas-projects/{id}/history/{snapshotId}:
     get:
       tags: [canvas]
@@ -903,6 +905,7 @@ paths:
     get:
       tags: [resources]
       summary: 读取资源二进制（非 JSON 信封）
+      description: variant=playback 返回就绪的兼容副本，副本不存在时回退原文件；只有实际副本的 ETag 含 :pb 标识。
       parameters:
         - in: path
           name: id
@@ -915,6 +918,29 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /resources/{id}/playback:
+    post:
+      tags: [resources]
+      summary: 按需准备所属视频的兼容预览
+      description: 解码失败后申请 H.264/AAC 副本，保留原文件；资源状态 processing/ready/failed 表示真实准备结果。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 信封 data.resource 返回最新资源
+        "404":
+          $ref: "#/components/responses/Error"
+  /resources/playback-cache:
+    delete:
+      tags: [resources]
+      summary: 清理所属视频的已完成兼容预览副本
+      description: 不删除原素材或正在处理的文件。
+      responses:
+        "200":
+          description: 信封 data.cleared 返回已清理数量
   /timeline/render-plan:
     post:
       tags: [tasks]
@@ -943,7 +969,7 @@ paths:
     post:
       tags: [tasks]
       summary: 创建本机字幕转写任务
-      description: 接收待转写素材编号和可选语言。只接受当前用户已上传完成的音视频。可选 clientOperationId：同一确认重复提交回读原任务。
+      description: 接收待转写素材编号、可选语言及 route(local/service)，省略 route 沿用 Seal 的 ASR 配置。只接受当前用户已上传完成的音视频。可选 clientOperationId：同一确认重复提交回读原任务。识别结果保留原素材时间戳。
       responses:
         "200":
           $ref: "#/components/responses/Envelope"
@@ -984,6 +1010,42 @@ paths:
       responses:
         "200":
           description: text/event-stream
+  /tasks/{id}:
+    get:
+      tags: [tasks]
+      summary: 读取任务及结果取回进度
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 信封 data 返回所属任务；delivery.outputs 可包含 outputIndex、downloadedBytes、totalBytes、bytesPerSecond、state(downloading/retrying/waiting)。进度仅在传输期间存在。
+  /tasks/{id}/cancel:
+    post:
+      tags: [tasks]
+      summary: 取消任务或停止已成功任务的结果取回
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 已成功任务仅暂停下载，保留原任务及部分文件，不重新生成。
+  /tasks/{id}/retry:
+    post:
+      tags: [tasks]
+      summary: 重试任务或继续已暂停的结果取回
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 已成功且暂停取回的任务返回原任务并恢复下载；失败生成按原有重试准入执行。
   /assets:
     get:
       tags: [assets]

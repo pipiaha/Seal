@@ -44,7 +44,7 @@ func TestValidateCatalogRequest(t *testing.T) {
 	if _, _, _, err := ValidateCatalogRequest("https://example.com/v1", "", ""); err == nil {
 		t.Fatal("empty key accepted")
 	}
-	if _, _, _, err := ValidateCatalogRequest("https://example.com/v1", "k", "claude"); err == nil {
+	if _, _, _, err := ValidateCatalogRequest("https://example.com/v1", "k", "unknown"); err == nil {
 		t.Fatal("unsupported format accepted")
 	}
 	base, key, format, err := ValidateCatalogRequest(" https://example.com/v1/ ", " k ", "")

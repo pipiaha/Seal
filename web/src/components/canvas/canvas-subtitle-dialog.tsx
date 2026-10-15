@@ -18,6 +18,7 @@ import { generateSubtitleHighlights, type SubtitleHighlightProgress } from "@/li
 import { createDefaultSubtitleStyle, type SrtEntry, type SubtitleHighlight, type SubtitlePosition, type SubtitleStyle } from "@/types/timeline";
 import type { CanvasNodeData, CanvasNodeMetadata } from "@/types/canvas";
 import { SubtitleHighlightedText } from "./canvas-subtitle-text";
+import { CanvasTranscriptionControls } from "./canvas-transcription-controls";
 
 type CanvasSubtitleDialogProps = {
     node: CanvasNodeData;
@@ -36,6 +37,7 @@ export function CanvasSubtitleDialog({ node, open, projectId, config, onClose, o
     const [highlights, setHighlights] = useState<SubtitleHighlight[]>([]);
     const [style, setStyle] = useState<SubtitleStyle>(createDefaultSubtitleStyle);
     const [running, setRunning] = useState(false);
+    const [transcribing, setTranscribing] = useState(false);
     const [progress, setProgress] = useState<SubtitleHighlightProgress | null>(null);
     const [videoUrl, setVideoUrl] = useState("");
     const [currentTimeMs, setCurrentTimeMs] = useState(0);
@@ -504,6 +506,9 @@ export function CanvasSubtitleDialog({ node, open, projectId, config, onClose, o
     return (
         <AppModal className="canvas-subtitle-dialog" title={title} open={open} centered footer={null} width={1120} destroyOnHidden onCancel={onClose} flush>
             <div className="flex h-[min(72vh,680px)] min-h-[420px] flex-col text-sm" style={{ color: theme.node.text }}>
+                <CanvasTranscriptionControls key={`${projectId}:${node.id}:${node.metadata?.storageKey || ""}`} projectId={projectId} nodeId={node.id}
+                    resourceId={resourceIdFromStorageKey(node.metadata?.storageKey || "")} disabled={running} onRunningChange={setTranscribing}
+                    onResult={next => { setEntries(next); setHighlights([]); }} />
                 <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: theme.toolbar.border, background: theme.toolbar.panel }}>
                     <input
                         ref={fileInputRef}
@@ -575,7 +580,7 @@ export function CanvasSubtitleDialog({ node, open, projectId, config, onClose, o
                         size="small"
                         type={running ? "default" : "primary"}
                         icon={running ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-                        disabled={!entries.length}
+                        disabled={!entries.length || transcribing}
                         onClick={running ? cancelAiHighlight : () => void runAiHighlight()}
                     >
                         {running ? "取消高亮" : "AI 关键词高亮"}
@@ -607,7 +612,7 @@ export function CanvasSubtitleDialog({ node, open, projectId, config, onClose, o
                         <Button disabled={running} onClick={onClose}>
                             取消
                         </Button>
-                        <Button type="primary" disabled={running} onClick={handleSave}>
+                        <Button type="primary" disabled={running || transcribing} onClick={handleSave}>
                             保存
                         </Button>
                     </div>

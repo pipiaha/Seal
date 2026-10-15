@@ -10,11 +10,27 @@ import { mediaResultMetadata } from "@/lib/canvas/canvas-node-semantics";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
 import type { CanvasGenerationExecution } from "./canvas-generation-executor-types";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import type { CanvasConnection } from "@/types/canvas";
 
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 
+function stageMediaNodes(input: Pick<CanvasGenerationExecution, "projectId" | "nodesRef" | "setNodes">, update: (nodes: CanvasNodeData[]) => CanvasNodeData[]) {
+    const next = update(input.nodesRef.current);
+    useCanvasStore.getState().updateProject(input.projectId, { nodes: next });
+    input.nodesRef.current = next;
+    input.setNodes(next);
+}
+
+function stageMediaConnections(input: Pick<CanvasGenerationExecution, "projectId" | "setConnections">, update: (connections: CanvasConnection[]) => CanvasConnection[]) {
+    const next = update(useCanvasStore.getState().openProject(input.projectId)?.connections || []);
+    useCanvasStore.getState().updateProject(input.projectId, { connections: next });
+    input.setConnections(next);
+}
+
 export async function executeVideoGeneration({
+    nodesRef,
     resolveReferenceLinks,
     nodeId,
     sourceNode,
@@ -76,7 +92,7 @@ export async function executeVideoGeneration({
     };
     registerPendingNodeIds([videoId]);
     // 待生成版本先加入版本族，但只有成功结果才能替换当前主版本。
-    setNodes((current) => {
+    stageMediaNodes({ projectId, nodesRef, setNodes }, (current) => {
         if (reuseSourceNode) return current.map((node) => (node.id === nodeId ? { ...node, ...videoNode } : node));
         if (!isExistingVideoNode || !sourceNode) return [...current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode];
         const rootId = versionRootId!;
@@ -92,7 +108,7 @@ export async function executeVideoGeneration({
     });
     // 重新生成已有视频时，新节点继承源视频的上游连接，与源视频保持并行关系，而不是作为其下游子节点。
     if (!reuseSourceNode) {
-        setConnections((current) => {
+        stageMediaConnections({ projectId, setConnections }, (current) => {
             if (!isExistingVideoNode) return [...current, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }];
             return [...current, ...canvasConnections.filter((connection) => connection.toNodeId === nodeId).map((connection) => ({ ...connection, id: nanoid(), toNodeId: videoId }))];
         });
@@ -137,6 +153,7 @@ export async function executeVideoGeneration({
 }
 
 export async function executeAudioGeneration({
+    nodesRef,
     nodeId,
     sourceNode,
     prompt,
@@ -172,10 +189,10 @@ export async function executeAudioGeneration({
         metadata: mediaResultMetadata("generated", { ...canvasGenerationPromptMetadata(prompt, effectivePrompt), status: NODE_STATUS_LOADING, ...buildAudioGenerationMetadata(generationConfig), ...skillMetadata, generatedFromNodeId: nodeId }),
     };
     registerPendingNodeIds([audioId]);
-    setNodes((current) =>
+    stageMediaNodes({ projectId, nodesRef, setNodes }, (current) =>
         reuseSourceNode ? current.map((node) => (node.id === nodeId ? { ...node, ...audioNode } : node)) : [...current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), audioNode],
     );
-    if (!reuseSourceNode && !isExistingAudioNode) setConnections((current) => [...current, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
+    if (!reuseSourceNode && !isExistingAudioNode) stageMediaConnections({ projectId, setConnections }, (current) => [...current, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
 
     startGenerationRequest(audioId, nodeId, nodeId, controller);
     try {

@@ -14,8 +14,10 @@ import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores
 import { ModelLogo } from "@/components/model-logo";
 import { MODEL_SERVICE_PRESETS, servicePresetFor, serviceSupportsModelCatalog } from "@/lib/model-service-presets";
 import { flushModelConfig, getModelConfigPersistenceState, subscribeModelConfigPersistence, type ModelConfigPersistenceState } from "@/services/model-config-repository";
+import { useChannelModelCatalog } from "@/hooks/use-channel-model-catalog";
+import { catalogRefreshLabel, channelCatalogConnectionIdentity, discoveredModelCapability } from "@/lib/channel-model-discovery";
 
-type UserChannelConnection = "openai" | "gemini";
+type UserChannelConnection = "openai" | "gemini" | "claude";
 type ChannelSettingsPaneProps = {
     onOpenModels?: () => void;
     capability?: ModelCapability;
@@ -116,7 +118,8 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
                 latestConfig.channels.map((item) => (item.id === channel.id ? applyFetchedChannelModelCatalog(item, result) : item)),
                 latestConfig,
             );
-            message.success(`${latestChannel.name || "当前渠道"}模型列表已更新`);
+            if (result.cacheWarning) message.warning(result.cacheWarning);
+            else message.success(`${latestChannel.name || "当前渠道"}模型目录已更新，新增型号可在管理中选择`);
         } catch (error) {
             message.error(channelModelFetchErrorMessage(error));
         } finally {
@@ -166,6 +169,7 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
                 message.success(`已更新 ${successful.length} 个渠道的模型`);
             }
             const warnings = [
+                ...successful.filter(item => item.result.cacheWarning).map(item => `${item.channel.name}：${item.result.cacheWarning}`),
                 ...failed.map((item) => `${item.channel.name || "未命名渠道"}：${item.error || "未返回模型"}`),
                 ...stale.map((item) => `${item.channel.name || "未命名渠道"}：连接配置已改变，已忽略旧结果`),
                 ...skipped.map((channel) => `${channel.name || "未命名渠道"}：${channelConnectionError(channel)}`),
@@ -198,13 +202,14 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
                         return <section key={channel.id} className={`model-channel-row ${channel.enabled === false ? "is-disabled" : ""}`} aria-labelledby={`channel-${capability}-${channel.id}-title`}>
                             <div className="model-channel-info">
                                 <span className="model-channel-logo"><ModelLogo icon={MODEL_SERVICE_PRESETS.find((preset) => preset.id === servicePresetFor(channel))?.icon} size={20} color /></span>
-                                <div><h3 id={`channel-${capability}-${channel.id}-title`}>{channel.name || "未命名渠道"}</h3><p>{channelProtocolLabel(channel)} · {channelHostLabel(channel.baseUrl)}{shared ? " · 共享连接" : ""}</p></div>
+                                <div><h3 id={`channel-${capability}-${channel.id}-title`}>{channel.name || "未命名渠道"}</h3><p>{channelProtocolLabel(channel)} · {channelHostLabel(channel.baseUrl)}{shared ? " · 共享连接" : ""}</p>{serviceSupportsModelCatalog(channel, capability) && <ChannelCatalogStatus channel={channel} />}</div>
                             </div>
                             <div className="model-channel-model-count"><span>{models.length} 个模型</span>{channel.enabled === false ? <small>已停用</small> : <ChannelStatus channel={channel} persistence={persistence} />}</div>
                             <Tooltip title={shared ? "共享连接，启停会影响该渠道的所有模型类型" : undefined}>
                                 <Switch size="small" aria-label={`启用${channel.name || "未命名渠道"}`} checked={channel.enabled !== false} onChange={(enabled) => updateChannel(channel.id, { enabled })} />
                             </Tooltip>
                             <div className="model-channel-row-actions">
+                                {serviceSupportsModelCatalog(channel, capability) && <Button size="small" type="text" aria-label={`刷新${channel.name || "未命名渠道"}模型`} icon={<RefreshCw size={14} />} loading={loadingChannelIds.includes(channel.id)} disabled={loadingChannelIds.includes("all")} onClick={() => void refreshChannelModels(channel)}>刷新</Button>}
                                 <Button size="small" type="text" aria-label={`管理${channel.name || "未命名渠道"}`} onClick={() => setServiceEditor(channel)}>管理</Button>
                                 {<Popconfirm title="删除这个渠道？" description={shared ? "这个共享连接的所有类型模型都会移除。" : "该渠道关联的模型选择会同时移除。"} okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteChannel(channel.id)}><Button size="small" type="text" danger aria-label={`删除${channel.name || "未命名渠道"}`} icon={<Trash2 size={14} />} /></Popconfirm>}
                             </div>
@@ -220,10 +225,15 @@ export function ChannelSettingsPane({ capability = "text", onOpenRunningHub }: C
 }
 
 export function applyFetchedChannelModelCatalog(channel: ModelChannel, result: ChannelModelFetchResult): ModelChannel {
-    const profiles = mergeFetchedChannelModelProfiles(channel, result.catalog);
+    const profiles = mergeFetchedChannelModelProfiles(channel, result.catalog.filter(item => discoveredModelCapability(channel, item) || channel.models.includes(item.id)));
     const existing = new Map((channel.modelProfiles || []).map((profile) => [profile.model, profile]));
     // Refresh updates the catalog without silently enabling new models or removing manual ones.
-    return { ...channel, models: channel.models.length ? channel.models : uniqueModels(result.models), modelProfiles: profiles.map((profile) => existing.get(profile.model) || profile).concat((channel.modelProfiles || []).filter((profile) => !profiles.some((item) => item.model === profile.model))) };
+    return { ...channel, models: channel.models, modelProfiles: profiles.map((profile) => existing.get(profile.model) || profile).concat((channel.modelProfiles || []).filter((profile) => !profiles.some((item) => item.model === profile.model))) };
+}
+
+function ChannelCatalogStatus({ channel }: { channel: ModelChannel }) {
+    const snapshot = useChannelModelCatalog(channel);
+    return <p className="text-xs text-foreground/45">{catalogRefreshLabel(snapshot)}</p>;
 }
 
 function WorkflowChannelEntry({ icon, title, description, status, ready, onOpen }: { icon: ReactNode; title: string; description: string; status: string; ready: boolean; onOpen?: () => void }) {
@@ -335,7 +345,7 @@ function channelModelFetchErrorMessage(error: unknown) {
 }
 
 function channelConnectionMode(channel: ModelChannel): UserChannelConnection {
-    return channel.apiFormat === "gemini" ? "gemini" : "openai";
+    return channel.apiFormat;
 }
 
 function channelConnectionError(channel: ModelChannel, _connection?: unknown) {
@@ -353,13 +363,15 @@ function channelConnectionError(channel: ModelChannel, _connection?: unknown) {
 }
 
 function channelConnectionSignature(channel: ModelChannel) {
-    return [channel.baseUrl.trim(), channel.referenceAssetOrigin?.trim() || "", channel.apiKey.trim(), channel.secretKey?.trim() || "", channel.apiFormat, JSON.stringify(channel.headers || [])].join("\n");
+    return channelCatalogConnectionIdentity(channel);
 }
 
 function channelProtocolLabel(channel: ModelChannel) {
     const preset = servicePresetFor(channel);
     if (preset === "doubao-tts") return "豆包原生语音";
     if (preset === "xfyun-tts") return "讯飞在线语音合成";
+    if (preset === "comfyui") return "ComfyUI 工作流";
+    if (channel.apiFormat === "claude") return "Anthropic 原生";
     return channelConnectionMode(channel) === "gemini" ? "Gemini 原生" : "OpenAI 兼容";
 }
 

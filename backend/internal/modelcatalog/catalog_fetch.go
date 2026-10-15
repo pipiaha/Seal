@@ -35,6 +35,8 @@ type catalogPayloadItem struct {
 	ID                       string                   `json:"id"`
 	Name                     string                   `json:"name"`
 	DisplayName              string                   `json:"display_name"`
+	DisplayNameGemini        string                   `json:"displayName"`
+	SupportedMethods         []string                 `json:"supportedGenerationMethods"`
 	ModelType                string                   `json:"model_type"`
 	SupportedEndpointTypes   []string                 `json:"supported_endpoint_types"`
 	DefaultParameters        catalogPayloadParameters `json:"default_parameters"`
@@ -63,19 +65,19 @@ func NormalizeCatalogAPIFormat(apiFormat string) (string, error) {
 	if normalized == "" {
 		normalized = "openai"
 	}
-	if normalized != "openai" && normalized != "gemini" {
+	if normalized != "openai" && normalized != "gemini" && normalized != "claude" {
 		return "", kernel.BadAuthRequest("接口协议不支持拉取模型")
 	}
 	return normalized, nil
 }
 
-func ValidateCatalogRequest(baseURL, apiKey, apiFormat string) (string, string, string, error) {
+func ValidateCatalogRequest(baseURL, apiKey, apiFormat string, allowNoKey ...bool) (string, string, string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	apiKey = strings.TrimSpace(apiKey)
 	if baseURL == "" {
 		return "", "", "", kernel.BadAuthRequest("请填写 Base URL")
 	}
-	if apiKey == "" {
+	if apiKey == "" && !(len(allowNoKey) > 0 && allowNoKey[0]) {
 		return "", "", "", kernel.BadAuthRequest("请填写 API Key")
 	}
 	normalizedFormat, err := NormalizeCatalogAPIFormat(apiFormat)
@@ -85,8 +87,8 @@ func ValidateCatalogRequest(baseURL, apiKey, apiFormat string) (string, string, 
 	return baseURL, apiKey, normalizedFormat, nil
 }
 
-func LoadChannelModelCatalog(ctx context.Context, fetcher CatalogFetcher, baseURL, apiFormat, apiKey string, headers []ChannelHeader, extras CatalogExtraSource) ([]ChannelModelCatalogItem, error) {
-	baseURL, apiKey, apiFormat, err := ValidateCatalogRequest(baseURL, apiKey, apiFormat)
+func LoadChannelModelCatalog(ctx context.Context, fetcher CatalogFetcher, baseURL, apiFormat, apiKey string, headers []ChannelHeader, extras CatalogExtraSource, allowNoKey ...bool) ([]ChannelModelCatalogItem, error) {
+	baseURL, apiKey, apiFormat, err := ValidateCatalogRequest(baseURL, apiKey, apiFormat, allowNoKey...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +125,11 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 	if payload.Code != nil && *payload.Code != 0 {
 		return nil, CatalogUpstreamRejectedError{}
 	}
+	if payload.Data == nil && payload.Models == nil {
+		return nil, kernel.BadAuthRequest("模型目录响应缺少 data 或 models 列表，请检查目录格式与接口路径")
+	}
 	items := payload.Data
-	if apiFormat == "gemini" {
+	if items == nil || apiFormat == "gemini" && payload.Models != nil {
 		items = payload.Models
 	}
 	seen := make(map[string]bool, len(items))
@@ -137,7 +142,7 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 		seen[name] = true
 		entry := ChannelModelCatalogItem{
 			ID:                     name,
-			DisplayName:            strings.TrimSpace(item.DisplayName),
+			DisplayName:            strings.TrimSpace(kernel.FirstNonEmpty(item.DisplayName, item.DisplayNameGemini)),
 			ModelType:              NormalizeCatalogModelType(item.ModelType),
 			SupportedEndpointTypes: NormalizeCatalogEndpointTypes(item.SupportedEndpointTypes),
 			DefaultParameters: ChannelModelCatalogDefaultParameters{
@@ -154,6 +159,19 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 			MinImages:         item.MinImages,
 			MaxImages:         item.MaxImages,
 			VideoCapabilities: item.VideoCapabilities,
+		}
+		if apiFormat == "claude" && entry.ModelType == "" {
+			entry.ModelType = "text"
+			entry.SupportedEndpointTypes = []string{"messages"}
+		}
+		if apiFormat == "gemini" && entry.ModelType == "" {
+			for _, method := range item.SupportedMethods {
+				if method == "predictLongRunning" {
+					entry.ModelType = "video"
+				} else if method == "predict" && entry.ModelType == "" {
+					entry.ModelType = "image"
+				}
+			}
 		}
 		if version := strings.TrimSpace(item.VideoCapabilitiesVersion); version != "" || len(item.VideoCapabilities) > 0 {
 			copied := version

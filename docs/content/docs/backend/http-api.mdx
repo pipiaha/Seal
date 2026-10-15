@@ -53,7 +53,9 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 `POST /timeline/render-plan` 接收时间线快照、不透明源标识和输出选项，返回版本化语义计划。源标识是 nodeId 或 resource id，不是本地路径。请求不得携带 ffmpeg 参数。该接口不做生成、不写资源、不创建任务。
 
-`POST /workspace/providers/comfyui/inspect` 仅限本地工作区，最多接收 64 KiB JSON：`baseUrl`、`authType`（none/bearer/header）、`apiKey`、`authHeader`、`headers`。返回信封中的 `data.stats` 与 `data.nodes`，分别来自 `/system_stats`、`/object_info`。请求允许连接配置中的回环服务，不允许跨服务重定向；不执行 `/prompt`，不安装节点。完整使用合同见[自定义图片、视频接口与本地 ComfyUI](../models/custom-media-providers)。
+`POST /workspace/providers/comfyui/inspect` 仅限本地工作区，最多接收 64 KiB JSON：`baseUrl`、`authType`（none/bearer/header）、`apiKey`、`authHeader`、`headers`。返回信封中的 `data.stats` 与 `data.nodes`，分别来自 `/system_stats`、`/object_info`。请求允许连接配置中的回环服务，不允许跨服务重定向；不执行 `/prompt`，不安装节点。检查最多运行 15 秒；连接拒绝、鉴权失败、地址错误及超时返回可操作的分类提示，不暴露底层响应或凭证。完整使用合同见[自定义图片、视频接口与本地 ComfyUI](../models/custom-media-providers)。
+
+`POST /ai/models` 使用当前会话和自定义渠道能力，按用户限流每分钟 30 次。入参为 `baseUrl`、`apiKey`、`apiFormat`（openai/gemini/claude）、可选 `modelsUrl`、`authType`（none/bearer/header）、`authHeader`、`headers`。`modelsUrl` 可为相对路径或同站点完整地址，拒绝跨站点发送渠道凭证或跨站点重定向；出站地址继续遵循网络边界。默认目录分别为 `/models`、`/v1beta/models`、`/v1/models`，原生分页最多 20 页、单页 8 MiB 且总时间 25 秒。返回 `data.models` 模型条目列表，原生 Anthropic 使用 `x-api-key` 与版本头；空列表、鉴权失败、目录不支持和无效 JSON 不互相伪装。此接口只读取，不提交生成任务，也不更改用户启用的模型。
 
 `POST /workspace/providers/script/preview` 仅限本地工作区，接收 `script`、统一生成输入 `request`（capability 为 image/video）和可选的供应商响应 JSON `response`。最多 256 KiB 请求体、64 KiB 源码；每次转换限时 200 毫秒。返回 `data.valid`、`create` 及配置中的 `poll/cancel/result` 请求描述；传入响应时附带 `parsedResponse`。不提供真实渠道密钥，不请求供应商或提交任务。保存接口时复用此检查；实际执行仍走生成任务执行器。
 
@@ -64,6 +66,22 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 `POST /timeline/renders` 接收同一套时间线快照和输出选项（宽高、帧率、采样率、是否烧录字幕），创建本机 ffmpeg 成片任务。选项进入任务输入并在执行时编译进语义计划。
 
 `POST /timeline/transcriptions` 接收待转写素材编号和可选语言，创建本机字幕转写任务。只接受当前用户已上传完成的音视频。
+
+画布字幕窗口也调用该入口，可传 `route: local/service`；省略则沿用 Seal 的 ASR 配置。`clientOperationId` 用于同一次提交的幂等重放，结果的 `segments.startMs/endMs` 保留原素材时间。关闭窗口仅结束当前监听，不取消已经受理的识别任务。
+
+### 生成保存与结果取回
+
+生成前先保存目标节点并确认当前画布归属，保存失败不提交生成。成功结果通过原任务绑定指定节点的生成字段，不使用完整画布快照回写，也不重建已经删除的节点。旧 `/canvas-projects/:id/generated-assets` 整体提交入口已移除。
+
+任务投影可返回 `delivery.outputs`，包括输出序号、已下载量、总大小（未知为 -1）、速度和 downloading/retrying/waiting 状态。这些是进程内观测数据，不写入画布元数据。
+
+已经成功但尚未取回结果的任务调用取消接口时，仅停止下载并保留原结果和部分文件；调用重试接口恢复同一任务的取回，不创建新的生成任务。暂停或到期后分别使用 `delivery_paused`、`delivery_timed_out` 阶段。传输支持 Range/If-Range，源文件变化时重新下载；停止页面监听不等于取消后台任务。
+
+### 视频兼容预览
+
+`POST /resources/:id/playback` 为所属视频按需准备兼容副本，返回最新资源状态。浏览器解码失败时再请求 H.264/AAC 预览，原文件保留。`GET /resources/:id/file?variant=playback&proxy=1` 在副本就绪时返回副本，否则返回原文件；只有实际返回副本时 ETag 带 `:pb` 标识，缺失副本不得误返回旧副本的 304。
+
+`DELETE /resources/playback-cache` 只清理当前用户已完成的兼容预览副本，不删除原素材或正在处理的文件。桌面优先使用随 Seal 的 edit-host 打包的 FFmpeg；原有 `CANVAS_FFMPEG_PATH` 显式覆盖仍可使用。
 
 `POST /depth-captures` 接收待处理视频素材编号，创建本机深度动作捕捉任务。只接受当前用户已上传完成的视频。
 

@@ -125,6 +125,19 @@ func registerUserDataRoutes(r *gin.RouterGroup, svc *app.Service) {
 		}
 		ok(c, gin.H{"usage": usage})
 	})
+	r.DELETE("/resources/playback-cache", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		cleared, err := svc.ClearVideoPreviewCache(user.ID)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"cleared": cleared})
+	})
 	r.POST("/resources", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -170,6 +183,19 @@ func registerUserDataRoutes(r *gin.RouterGroup, svc *app.Service) {
 		}
 		ok(c, gin.H{"resource": resource})
 	})
+	r.POST("/resources/:id/playback", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		resource, err := svc.PrepareResourcePlayback(user.ID, c.Param("id"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"resource": resource})
+	})
 	r.GET("/resources/:id/file", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -198,9 +224,22 @@ func registerUserDataRoutes(r *gin.RouterGroup, svc *app.Service) {
 		// 副本就绪时用独立 ETag 后缀，避免浏览器拿原件缓存命中 304 而继续黑屏。
 		usePlayback := c.Query("variant") == "playback" && resource.Provider == "local" &&
 			resource.PlaybackStatus == model.PlaybackStatusReady && resource.PlaybackObjectKey != ""
+		var stream *app.ResourceStream
+		if usePlayback {
+			stream, err = svc.OpenResourcePlaybackRange(user.ID, resource.ID)
+			if errors.Is(err, app.ErrPlaybackNotReady) {
+				usePlayback = false
+			} else if err != nil {
+				failService(c, err)
+				return
+			} else {
+				defer stream.Body.Close()
+				resource = stream.Resource
+			}
+		}
 		serveETag := etag
 		if usePlayback {
-			serveETag = etag + ":pb"
+			serveETag = playbackResponseETag(etag)
 		}
 		// 资源 ID 内容不可变（上传永远生成新 ID，不会原地覆盖）：图片可以放心交给浏览器
 		// 磁盘强缓存 30 天，大画布二次打开零请求直读磁盘缓存。视频/音频涉及转码副本
@@ -225,36 +264,14 @@ func registerUserDataRoutes(r *gin.RouterGroup, svc *app.Service) {
 		if ifRange := strings.TrimSpace(c.GetHeader("If-Range")); ifRange != "" && ifRange != serveETag {
 			rangeHeader = ""
 		}
-		var stream *app.ResourceStream
-		if usePlayback {
-			stream, err = svc.OpenResourcePlaybackRange(user.ID, resource.ID)
-			if err == nil {
-				resource = stream.Resource // MimeType 已置 video/mp4
-			} else if errors.Is(err, app.ErrPlaybackNotReady) {
-				// 副本尚未就绪：回退原件，并撤销 :pb 后缀，保证副本就绪后
-				// 浏览器不会拿原件缓存命中 304 而继续黑屏。
-				c.Header("ETag", etag)
-				stream, err = svc.OpenResourceRange(user.ID, resource.ID, rangeHeader)
-				if err != nil {
-					failService(c, err)
-					return
-				}
-			} else {
-				failService(c, err)
-				return
-			}
-		} else {
+		if stream == nil {
 			stream, err = svc.OpenResourceRange(user.ID, resource.ID, rangeHeader)
 			if err != nil {
 				failService(c, err)
 				return
 			}
+			defer stream.Body.Close()
 		}
-		if err != nil {
-			failService(c, err)
-			return
-		}
-		defer stream.Body.Close()
 		if resource.MimeType == "" {
 			resource.MimeType = "application/octet-stream"
 		}
@@ -598,39 +615,6 @@ func registerUserDataRoutes(r *gin.RouterGroup, svc *app.Service) {
 		log.Printf("canvas_restore request_id=%q trace_id=%q actor=%q canvas=%q snapshot=%q base_revision=%d revision=%d", RequestID(c), TraceID(c), user.ID, c.Param("id"), c.Param("snapshotId"), *req.Revision, project.Revision)
 		ok(c, gin.H{"project": project})
 	})
-	r.PUT("/canvas-projects/:id/generated-assets", func(c *gin.Context) {
-		user, err := currentUser(c, svc)
-		if err != nil {
-			failService(c, err)
-			return
-		}
-		policy, available := loadRuntimePolicy(c, svc)
-		if !available || !enforceRateLimit(c, "canvas-write:"+user.ID, policy.Request.CanvasWritePerMinute, time.Minute) {
-			return
-		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
-		var req struct {
-			Project json.RawMessage   `json:"project"`
-			Assets  []json.RawMessage `json:"assets"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			fail(c, http.StatusBadRequest, err)
-			return
-		}
-		var identity struct {
-			ID string `json:"id"`
-		}
-		if json.Unmarshal(req.Project, &identity) != nil || identity.ID != c.Param("id") {
-			fail(c, http.StatusBadRequest, app.BadAuthRequest("画布 ID 与请求路径不一致"))
-			return
-		}
-		project, err := svc.CommitUserCanvasProjectAssets(user.ID, req.Project, req.Assets)
-		if err != nil {
-			failService(c, err)
-			return
-		}
-		ok(c, gin.H{"project": project})
-	})
 	r.PUT("/canvas-projects/:id", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -702,6 +686,10 @@ func hasUserAssetPageFilters(c *gin.Context) bool {
 		}
 	}
 	return false
+}
+
+func playbackResponseETag(original string) string {
+	return strings.TrimSuffix(original, `"`) + `:pb"`
 }
 
 func queryFlag(c *gin.Context, key string) bool {

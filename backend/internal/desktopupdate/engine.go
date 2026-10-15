@@ -30,7 +30,6 @@ type verifiedUpdate struct {
 type stagedUpdate struct {
 	version  string
 	notes    string
-	root     string
 	archive  string
 	platform string
 	artifact PlatformArtifact
@@ -197,6 +196,8 @@ func (e *Engine) CheckForUpdate(ctx context.Context) (UpdateState, error) {
 	}
 	e.set(func(state *UpdateState) {
 		state.Status = StatusChecking
+		state.Phase = ""
+		state.InstallPrepared = false
 		state.Error = ""
 	})
 	payload, err := e.fetchFeed(ctx)
@@ -274,6 +275,9 @@ func (e *Engine) DownloadUpdate(ctx context.Context) (UpdateState, error) {
 	}
 	e.set(func(state *UpdateState) {
 		state.Status = StatusDownloading
+		state.Phase = "downloading"
+		state.CompletedFiles, state.TotalFiles = 0, 0
+		state.InstallPrepared = false
 		state.LatestVersion = verified.payload.Version
 		state.ReleaseNotes = verified.payload.Notes
 		state.DownloadedBytes = 0
@@ -286,6 +290,13 @@ func (e *Engine) DownloadUpdate(ctx context.Context) (UpdateState, error) {
 		return e.snapshot(), err
 	}
 	archivePath := filepath.Join(stageRoot, "update.zip")
+	stagingAccepted := false
+	defer func() {
+		// Only remove this invocation's incomplete download, never recovery data.
+		if !stagingAccepted {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	if err := e.downloadArchive(ctx, verified.artifact, archivePath); err != nil {
 		// The staging directory is still empty here; resumable bytes live in
 		// the shared downloads directory.
@@ -294,29 +305,21 @@ func (e *Engine) DownloadUpdate(ctx context.Context) (UpdateState, error) {
 		e.fail(publicError(err))
 		return e.snapshot(), wrapPublic(err)
 	}
-	extracted := filepath.Join(stageRoot, "extracted")
-	if err := extractSecureZip(archivePath, extracted, defaultExtractLimits()); err != nil {
-		e.logf("extract failed: %v", err)
-		e.fail(publicError(ErrInvalidArchive))
-		return e.snapshot(), ErrInvalidArchive
-	}
-	if err := validateExtractedLayout(extracted, verified.platform); err != nil {
-		e.logf("layout invalid: %v", err)
-		e.fail(publicError(ErrInvalidArchive))
-		return e.snapshot(), ErrInvalidArchive
-	}
+	// Keep the signed archive only. Extract once on the installation volume,
+	// and validate the entire layout before the running application can exit.
 	e.mu.Lock()
 	e.staged = &stagedUpdate{
 		version:  verified.payload.Version,
 		notes:    verified.payload.Notes,
-		root:     extracted,
 		archive:  archivePath,
 		platform: verified.platform,
 		artifact: verified.artifact,
 	}
 	e.mu.Unlock()
+	stagingAccepted = true
 	e.set(func(state *UpdateState) {
 		state.Status = StatusReady
+		state.Phase = ""
 		state.LatestVersion = verified.payload.Version
 		state.ReleaseNotes = verified.payload.Notes
 		state.DownloadedBytes = verified.artifact.Size
@@ -328,6 +331,8 @@ func (e *Engine) DownloadUpdate(ctx context.Context) (UpdateState, error) {
 }
 
 func (e *Engine) InstallUpdate(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
 	if err := e.begin(actionInstall); err != nil {
 		return err
 	}
@@ -344,12 +349,17 @@ func (e *Engine) InstallUpdate(ctx context.Context) error {
 	}
 	e.set(func(state *UpdateState) {
 		state.Status = StatusInstalling
+		state.Phase = "verifying"
+		state.InstallPrepared = false
 		state.Error = ""
 	})
 	if err := e.prepareAndStartHelper(ctx, staged); err != nil {
-		e.fail(publicError(err))
-		return wrapPublic(err)
+		e.fail(publicInstallError(err))
+		return fmt.Errorf("%s", publicInstallError(err))
 	}
+	e.set(func(state *UpdateState) { state.InstallPrepared = true })
+	e.setPhase("restarting")
+	e.logf("install prepared version=%s; requesting exit", staged.version)
 	if e.quit != nil {
 		if err := e.quit(); err != nil {
 			e.killHelper()
@@ -428,8 +438,23 @@ func (e *Engine) snapshot() UpdateState {
 func (e *Engine) set(fn func(*UpdateState)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	previous := e.state.Status
 	fn(&e.state)
+	if previous != e.state.Status {
+		e.state.Phase = ""
+		e.state.CompletedFiles = 0
+		e.state.TotalFiles = 0
+	}
 	e.state.CurrentVersion = e.currentVersion
+}
+
+func (e *Engine) setPhase(phase string) {
+	e.set(func(state *UpdateState) {
+		state.Phase = phase
+		state.CompletedFiles = 0
+		state.TotalFiles = 0
+	})
+	e.logf("update phase=%s", phase)
 }
 
 func (e *Engine) fail(message string) {

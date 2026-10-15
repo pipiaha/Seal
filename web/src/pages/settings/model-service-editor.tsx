@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Button, Checkbox, Form, Input, Select, Spin } from "antd";
-import { Check, ChevronDown, RefreshCw, Search, Settings2, X } from "lucide-react";
+import { Alert, Button, Checkbox, Form, Input, Popconfirm, Select, Spin } from "antd";
+import { Check, ChevronDown, RefreshCw, Search, Settings2, Trash2, X } from "lucide-react";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { ModelLogo } from "@/components/model-logo";
 import { ChannelHeadersEditor, validateChannelHeaders } from "@/components/channel-headers-editor";
 import { fetchChannelModels, type ChannelModelFetchResult } from "@/services/api/image-models";
 import { fetchPluginProviderCatalog } from "@/services/api/plugin-catalog";
 import { mergeFetchedChannelModelProfiles, type ChannelModelCatalogItem } from "@/lib/channel-model-catalog";
-import { MODEL_SERVICE_PRESETS, modelServicePresetsFor, modelServicePresetConnection, modelCatalogRequestURL, serviceConnectionError, serviceModelProfile, servicePresetFor, type ModelServicePresetId } from "@/lib/model-service-presets";
+import { MODEL_SERVICE_PRESETS, modelServicePresetsFor, modelServicePresetConnection, modelCatalogRequestURL, serviceConnectionError, serviceModelProfile, servicePresetFor, serviceSupportsModelCatalog, type ModelServicePresetId } from "@/lib/model-service-presets";
 import { channelModelsForCapability, mergeCategoryModelProfiles } from "@/lib/model-channel-settings";
 import type { ModelProtocolDefinition } from "@/lib/model-protocols";
 import { createModelChannel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
@@ -17,6 +17,9 @@ import "./model-service-editor.css";
 import { configuredProfileError, defaultCustomProvider, type GenerationModelProfile } from "@/lib/configured-provider";
 import { defaultModelCapabilityConfig } from "@/lib/model-capabilities";
 import { previewProviderScript, providerScriptSample } from "@/services/api/configured-provider";
+import { useChannelModelCatalog } from "@/hooks/use-channel-model-catalog";
+import { catalogRefreshLabel, catalogWithSavedModels, channelCatalogConnectionIdentity, discoveredModelCapability, modelAbsentFromCatalog } from "@/lib/channel-model-discovery";
+import { useComfyUIConnection } from "./use-comfyui-connection";
 
 const labels: Record<ModelCapability, string> = { text: "文字", image: "图片", video: "视频", audio: "配音" };
 
@@ -35,7 +38,18 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
     const [editingCapabilities, setEditingCapabilities] = useState(false);
     const [interfaceModel, setInterfaceModel] = useState("");
     const [pendingInterface, setPendingInterface] = useState<GenerationModelProfile>(() => newCustomInterface(capability));
+    const [addingWorkflow, setAddingWorkflow] = useState(false);
+    const [workflowJSONEditing, setWorkflowJSONEditing] = useState(false);
+    const comfyConnection = useComfyUIConnection(draft);
     const alive = useRef(true);
+    const connectionId = channelCatalogConnectionIdentity(draft);
+    const liveConnectionId = useRef(connectionId);
+    liveConnectionId.current = connectionId;
+    const snapshot = useChannelModelCatalog(draft);
+    useEffect(() => {
+        setCatalog(catalogWithSavedModels(draft, snapshot));
+    }, [connectionId, snapshot]);
+    useEffect(() => { setError(""); setNotice(""); }, [connectionId]);
 
     useEffect(() => {
         alive.current = true;
@@ -59,9 +73,9 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
         const previous = MODEL_SERVICE_PRESETS.find((item) => item.id === presetId);
         const resetModels = !initial && id !== presetId;
         const seededModel = capability === "audio" ? preset.audioModel : id === "agnes" ? capability === "image" ? "agnes-image-2.5-flash" : "agnes-video-2.5-flash" : id === "comfyui" ? `comfyui-${capability}` : undefined;
-        const seededProfiles = seededModel ? [{ ...serviceModelProfile({ ...draft, baseUrl: preset.baseUrl }, { id: seededModel, modelType: capability }, protocols, capability), protocol: preset.protocols[capability], ...(capability === "audio" ? { defaultOptions: { voice: "", ...(id === "xfyun-tts" ? { appId: "" } : {}) } } : {}) }] : [];
+        const seededProfiles = seededModel ? [{ ...serviceModelProfile({ ...draft, baseUrl: preset.baseUrl }, { id: seededModel, modelType: capability }, protocols, capability), protocol: preset.protocols[capability], ...(id === "comfyui" ? { displayName: capability === "video" ? "视频工作流" : "图片工作流" } : {}), ...(capability === "audio" ? { defaultOptions: { voice: "", ...(id === "xfyun-tts" ? { appId: "" } : {}) } } : {}) }] : [];
         if (resetModels) setCatalog(seededModel ? [{ id: seededModel, modelType: capability }] : []);
-        patch({ ...modelServicePresetConnection(preset, capability), ...(resetModels ? { models: seededModel ? [seededModel] : [], modelProfiles: seededProfiles } : {}), ...(id !== presetId ? { apiKey: "", hasApiKey: false, secretKey: "", hasSecretKey: false, headers: [], authType: id === "comfyui" ? "none" : "bearer", authHeader: "" } : {}), name: !draft.name || draft.name === previous?.name ? id === "compatible" ? "" : preset.name : draft.name });
+        patch({ ...modelServicePresetConnection(preset, capability), ...(resetModels ? { models: seededModel ? [seededModel] : [], modelProfiles: seededProfiles } : {}), ...(id !== presetId ? { modelsUrl: undefined, apiKey: "", hasApiKey: false, secretKey: "", hasSecretKey: false, headers: [], authType: id === "comfyui" ? "none" : "bearer", authHeader: "" } : {}), name: !draft.name || draft.name === previous?.name ? id === "compatible" ? "" : preset.name : draft.name });
         if (id === "comfyui") setEditingCapabilities(true);
         setNotice("");
     };
@@ -71,29 +85,29 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
         return !problem;
     };
     const applyCatalog = (result: ChannelModelFetchResult) => {
-        const byId = new Map(catalog.map((item) => [item.id, item]));
+        const byId = new Map(catalog.filter(item => draft.models.includes(item.id)).map((item) => [item.id, item]));
         for (const item of result.catalog) byId.set(item.id, item);
         for (const id of result.models) if (!byId.has(id)) byId.set(id, { id });
         const next = [...byId.values()];
         const enriched = mergeFetchedChannelModelProfiles({ ...draft, modelProfiles: [] }, result.catalog);
         const existing = new Map((draft.modelProfiles || []).map((profile) => [profile.model, profile]));
-        const profiles = next.map((item) => {
+        const profiles = next.filter(item => draft.models.includes(item.id) || discoveredModelCapability(draft, item)).map((item) => {
             const profile = serviceModelProfile(draft, item, protocols);
             const metadata = enriched.find((entry) => entry.model === item.id);
             return existing.has(item.id) ? existing.get(item.id)! : { ...profile, capabilityConfig: metadata?.capabilityConfig || profile.capabilityConfig };
         });
         setDraft((current) => ({ ...current, modelProfiles: mergeCategoryModelProfiles(current, profiles) }));
         setCatalog(next);
-        setNotice(result.models.length ? `已读取 ${result.models.length} 个模型，仅展示${labels[capability]}模型。目录未标明类型的模型可在下方手动添加。` : "服务未返回模型，可以手动添加模型 ID。");
+        setNotice(result.cacheWarning || (result.models.length ? `已刷新 ${result.models.length} 个模型。未标明类型的条目可选择加入当前${labels[capability]}渠道；已有参数和默认选择保持不变。` : "服务未返回模型，已保留当前配置，可手动添加模型 ID。"));
     };
     const fetchModels = async () => {
         if (!validateConnection()) return;
         setBusy(true); setError(""); setNotice("");
         try {
             const result = await fetchChannelModels(draft, true);
-            if (alive.current) applyCatalog(result);
+            if (alive.current && liveConnectionId.current === connectionId) applyCatalog(result);
         } catch (failure) {
-            if (alive.current) setError(failure instanceof Error ? failure.message : "读取模型失败，可手动添加模型 ID");
+            if (alive.current && liveConnectionId.current === connectionId) setError(`${failure instanceof Error ? failure.message : "读取模型失败"}；保留上次目录和已配置模型，也可手动添加`);
         } finally { if (alive.current) setBusy(false); }
     };
     const showModelSettings = (model: string) => {
@@ -102,7 +116,7 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
     };
     const toggleModel = (id: string, enabled: boolean) => {
         const item = catalog.find((candidate) => candidate.id === id) || { id };
-        const profile = serviceModelProfile(draft, item, protocols);
+        const profile = draft.modelProfiles?.find(entry => entry.model === id) || serviceModelProfile(draft, item, protocols, discoveredModelCapability(draft, item) || capability);
         setDraft((current) => ({ ...current, models: enabled ? [...new Set([...current.models, id])] : current.models.filter((model) => model !== id), modelProfiles: mergeCategoryModelProfiles(current, [profile]) }));
         if (enabled && !profile.protocol) { showModelSettings(id); setNotice("请为该模型选择实际请求协议，并按服务商要求配置输入与参数。"); }
         setError("");
@@ -118,6 +132,8 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
         setDraft((current) => ({ ...current, models: [...current.models, id], modelProfiles: mergeCategoryModelProfiles(current, [profile]) }));
         if (customMedia) setInterfaceModel(id);
         setManualName(""); setError("");
+        setAddingWorkflow(false);
+        setInterfaceModel(id);
     };
     const save = async () => {
         if (!validateConnection()) return;
@@ -145,7 +161,7 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
         } catch (failure) { setError(failure instanceof Error ? failure.message : "保存失败，请重试"); }
         finally { if (alive.current) setBusy(false); }
     };
-    const visibleModels = catalog.filter((item) => serviceModelProfile(draft, item, protocols).capability === capability && `${item.id} ${item.displayName || ""}`.toLowerCase().includes(query.toLowerCase()));
+    const visibleModels = catalog.filter((item) => (!discoveredModelCapability(draft, item) || discoveredModelCapability(draft, item) === capability) && `${item.id} ${item.displayName || ""}`.toLowerCase().includes(query.toLowerCase()));
     const selectedModels = channelModelsForCapability(draft, capability);
     const customMedia = presetId === "compatible" && (capability === "image" || capability === "video");
     const configuredModel = selectedModels.includes(interfaceModel) ? interfaceModel : selectedModels[0];
@@ -161,7 +177,8 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
     const presets = modelServicePresetsFor(capability);
     const selectedPreset = MODEL_SERVICE_PRESETS.find((item) => item.id === presetId)!;
     const nativeSpeech = capability === "audio" && (presetId === "doubao-tts" || presetId === "xfyun-tts");
-    const manualCatalog = draft.apiFormat === "claude" || selectedPreset.manualCatalog?.includes(capability);
+    const manualCatalog = !serviceSupportsModelCatalog(draft, capability);
+    const comfyService = presetId === "comfyui";
 
     return <AppModal open centered width={760} flush footer={null} title={null} closable={false} keyboard={!busy} mask={{ closable: false }} onCancel={onClose} rootClassName="model-service-modal">
         <header className="model-service-header">
@@ -177,14 +194,17 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
                 </div>
                 {selectedPreset.connections && <Form.Item label="服务站点" extra="选择创建 API Key 的站点；国内站与国际站的密钥不应混用。"><Select aria-label="服务站点" placeholder="按供应商提供的地址选择" value={selectedPreset.connections.find(connection => connection.value === draft.baseUrl.replace(/\/$/, ""))?.value} options={selectedPreset.connections} onChange={baseUrl => patch({ baseUrl })} /></Form.Item>}
                 <Form.Item label="服务地址"><Input aria-label="服务地址" inputMode="url" placeholder="https://api.example.com/v1" value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} /></Form.Item>
-                <Form.Item label="鉴权方式"><Select aria-label="鉴权方式" value={draft.authType || "bearer"} options={[{ value: "bearer", label: "API Key / Bearer" }, { value: "header", label: "指定请求头" }, { value: "none", label: "无需鉴权（本地服务）" }]} onChange={authType => patch({ authType })} /></Form.Item>
+                {!comfyService && <Form.Item label="鉴权方式"><Select aria-label="鉴权方式" value={draft.authType || "bearer"} options={[{ value: "bearer", label: "API Key / Bearer" }, { value: "header", label: "指定请求头" }, { value: "none", label: "无需鉴权（本地服务）" }]} onChange={authType => patch({ authType })} /></Form.Item>}
                 {draft.authType === "header" && <Form.Item label="鉴权请求头名称"><Input aria-label="鉴权请求头名称" placeholder="X-API-Key" value={draft.authHeader || ""} onChange={event => patch({ authHeader: event.target.value })} /></Form.Item>}
-                {draft.authType !== "none" && <Form.Item label="API Key"><Input.Password aria-label="API Key" autoComplete="new-password" placeholder={draft.hasApiKey ? "已保存密钥，留空保留" : "填写服务商提供的 API Key"} value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} /></Form.Item>}
+                {!comfyService && draft.authType !== "none" && <Form.Item label="API Key"><Input.Password aria-label="API Key" autoComplete="new-password" placeholder={draft.hasApiKey ? "已保存密钥，留空保留" : "填写服务商提供的 API Key"} value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} /></Form.Item>}
+                {comfyService && <div className="comfy-connection-check"><Button loading={comfyConnection.checking} onClick={() => { if (validateConnection()) void comfyConnection.check(); }}>测试连接</Button><span role="status">{comfyConnection.checking ? "正在连接…" : comfyConnection.nodes ? "已连接 · 本机模型已读取" : "先启动 ComfyUI，再测试连接"}</span>{comfyConnection.error && <Alert type="error" showIcon title={comfyConnection.error} />}</div>}
                 {capability === "audio" && draft.modelProfiles?.some((profile) => profile.protocol === "xfyun-tts") && <Form.Item label="API Secret"><Input.Password aria-label="讯飞 API Secret" autoComplete="new-password" placeholder={draft.hasSecretKey ? "已保存，留空保留" : "在线语音合成服务的 API Secret"} value={draft.secretKey || ""} onChange={(event) => patch({ secretKey: event.target.value })} /></Form.Item>}
             </Form>
             <section className="model-service-settings" aria-label="渠道高级设置">
-                <button type="button" className="model-service-advanced" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><Settings2 size={14} />高级设置<ChevronDown size={14} /></button>
+                <button type="button" className="model-service-advanced" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><Settings2 size={14} />{comfyService ? "连接选项（可选）" : "高级设置"}<ChevronDown size={14} /></button>
                 {advanced && <>
+                {comfyService && <Form layout="vertical" requiredMark={false}><Form.Item label="鉴权方式"><Select aria-label="鉴权方式" value={draft.authType || "none"} options={[{ value: "none", label: "无需鉴权（本地服务）" }, { value: "bearer", label: "API Key / Bearer" }, { value: "header", label: "指定请求头" }]} onChange={authType => patch({ authType })} /></Form.Item>{draft.authType !== "none" && <Form.Item label="API Key"><Input.Password aria-label="API Key" value={draft.apiKey} autoComplete="new-password" onChange={event => patch({ apiKey: event.target.value })} /></Form.Item>}<ChannelHeadersEditor value={draft.headers} onChange={headers => patch({ headers })} /></Form>}
+                {!comfyService && <Form layout="vertical" requiredMark={false}><Form.Item label="模型目录接口（可选）" extra="默认按目录格式读取。服务使用其他路径时可填写 /path 或同站点完整地址。"><Input aria-label="模型目录接口" value={draft.modelsUrl || ""} placeholder="例如 /v1/models" onChange={event => patch({ modelsUrl: event.target.value })} /></Form.Item></Form>}
                 {customMedia && <section className="model-service-interface" aria-label="自定义服务接口配置">
                     <p className="model-service-contract-note">按服务商文档配置接口，然后添加模型 ID。</p>
                     <Form layout="vertical" requiredMark={false} disabled={busy}>
@@ -194,40 +214,47 @@ export function ModelServiceEditor({ initial, capability = "text", onClose, onSa
                     <ConfiguredProviderEditor key={`${configuredModel || "new"}:${interfaceProfile.protocol}`} channel={draft} profile={interfaceProfile} onChange={updateInterface} />
                     {configuredModel && <ChannelModelSettings draft capabilitiesOnly channel={{ ...draft, models: [configuredModel] }} onChange={profiles => setDraft(current => ({ ...current, modelProfiles: mergeCategoryModelProfiles(current, profiles) }))} />}
                 </section>}
-                <details className="model-service-connection-options"><summary>附加连接参数</summary><Form layout="vertical" requiredMark={false} disabled={busy} className="model-service-advanced-fields">
-                    {!nativeSpeech && <Form.Item label="模型目录格式"><Select aria-label="模型目录格式" value={draft.apiFormat} options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini 原生" }, { value: "claude", label: "Anthropic（手动添加模型）" }]} onChange={apiFormat => patch({ apiFormat })} /></Form.Item>}
+                {!comfyService && <details className="model-service-connection-options"><summary>附加连接参数</summary><Form layout="vertical" requiredMark={false} disabled={busy} className="model-service-advanced-fields">
+                    {!nativeSpeech && !comfyService && <Form.Item label="模型目录格式"><Select aria-label="模型目录格式" value={draft.apiFormat} options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini 原生" }, { value: "claude", label: "Anthropic 原生" }]} onChange={apiFormat => patch({ apiFormat })} /></Form.Item>}
                     <Form.Item label="素材服务地址（可选）" help="服务使用独立素材域名时填写 HTTPS 域名。"><Input aria-label="素材服务地址" value={draft.referenceAssetOrigin || ""} onChange={event => patch({ referenceAssetOrigin: event.target.value })} /></Form.Item>
                     {!draft.modelProfiles?.some(profile => profile.protocol === "xfyun-tts") && <Form.Item label="Secret Key（按需填写）"><Input.Password aria-label="Secret Key" autoComplete="new-password" value={draft.secretKey || ""} placeholder={draft.hasSecretKey ? "已保存密钥，留空保留" : "AK/SK 鉴权时填写"} onChange={event => patch({ secretKey: event.target.value })} /></Form.Item>}
                     <ChannelHeadersEditor value={draft.headers} onChange={headers => patch({ headers })} />
-                    {catalogURL && <div className="model-service-url"><span>模型目录地址</span><code>{catalogURL}</code></div>}
-                </Form></details>
+                    {catalogURL && !comfyService && <div className="model-service-url"><span>模型目录地址</span><code>{catalogURL}</code></div>}
+                </Form></details>}
                 </>}
             </section>
             <section className="model-service-models">
-                <div className="model-service-catalog-header"><h3>模型</h3><Button size="small" icon={<RefreshCw size={14} />} loading={busy} disabled={protocolLoading || Boolean(manualCatalog)} onClick={() => void fetchModels()}>读取模型</Button></div>
-                {manualCatalog && <p className="model-service-contract-note">{presetId === "comfyui" ? "点击下方「模型协议与参数 → 配置使用」，导入 API 工作流。不同工作流可以作为不同模型添加。" : nativeSpeech ? "已加入对应的语音服务，请在下方配置应用信息和音色。此服务无需读取模型目录。" : "此预设使用手动模型 ID，请填写服务商控制台提供的模型名称。未调用不适用的模型目录接口。"}</p>}
-                {capability === "video" && !customMedia && <p className="model-service-contract-note">目录格式只负责读取模型。每个视频模型独立选择请求协议；图片、视频、音频引用与输出规格按模型分别配置。</p>}
+                <div className="model-service-catalog-header"><h3>{comfyService ? "工作流" : "模型"}</h3>{!manualCatalog && <Button size="small" icon={<RefreshCw size={14} />} loading={busy} disabled={protocolLoading} onClick={() => void fetchModels()}>刷新模型</Button>}</div>
+                {!comfyService && !manualCatalog && <p className="model-service-contract-note">{catalogRefreshLabel(snapshot)} · 手工添加的型号不受目录限制</p>}
+                {manualCatalog && !comfyService && <p className="model-service-contract-note">{nativeSpeech ? "已加入对应的语音服务，请在下方配置应用信息和音色。此服务无需读取模型目录。" : "此服务没有默认模型目录，可手工添加任意型号；如供应商提供列表接口，可在高级设置中填写。"}</p>}
+                {capability === "video" && !customMedia && !comfyService && <p className="model-service-contract-note">目录格式只负责读取模型。每个视频模型独立选择请求协议；图片、视频、音频引用与输出规格按模型分别配置。</p>}
                 {otherModels > 0 && <p className="model-service-contract-note">该连接还包含 {otherModels} 个其他类型模型，会保留原有配置；连接信息和渠道启停由各类型共用。</p>}
-                <Input aria-label="搜索模型" prefix={<Search size={15} />} placeholder={`搜索${labels[capability]}模型`} value={query} onChange={(event) => setQuery(event.target.value)} allowClear />
+                {!comfyService && <><Input aria-label="搜索模型" prefix={<Search size={15} />} placeholder={`搜索${labels[capability]}模型`} value={query} onChange={(event) => setQuery(event.target.value)} allowClear />
                 <div className="model-service-catalog">
                     {protocolLoading ? <Spin size="small" /> : visibleModels.length ? visibleModels.map((item) => {
                         const profile = serviceModelProfile(draft, item, protocols);
                         const protocol = protocols.find((entry) => entry.value === profile.protocol);
-                        return <label key={item.id} className="model-service-model"><Checkbox disabled={busy} checked={draft.models.includes(item.id)} onChange={(event) => toggleModel(item.id, event.target.checked)} /><span><strong>{profile.displayName || item.displayName || item.id}</strong><small>{profile.displayName || item.displayName ? item.id : protocol?.label || "需要配置请求协议"}</small></span>{draft.models.includes(item.id) && !profile.protocol && <small>待配置协议</small>}</label>;
-                    }) : <div className="model-service-empty"><strong>{query ? "没有匹配的模型" : `添加${labels[capability]}模型`}</strong><p>读取目录，或手动输入模型 ID。</p></div>}
+                        return <label key={item.id} className="model-service-model"><Checkbox disabled={busy} checked={draft.models.includes(item.id)} onChange={(event) => toggleModel(item.id, event.target.checked)} /><span><strong>{profile.displayName || item.displayName || item.id}</strong><small>{!discoveredModelCapability(draft, item) ? `类型未标明 · 可作为${labels[capability]}模型添加` : profile.displayName || item.displayName ? item.id : protocol?.label || "需要配置请求协议"}</small></span>{modelAbsentFromCatalog(item.id, snapshot) && <small>目录未再列出</small>}{draft.models.includes(item.id) && !profile.protocol && <small>待配置协议</small>}</label>;
+                    }) : <div className="model-service-empty"><strong>{query ? comfyService ? "没有匹配的工作流" : "没有匹配的模型" : comfyService ? "添加工作流" : `添加${labels[capability]}模型`}</strong><p>{comfyService ? "先添加工作流名称，再导入 API 工作流文件。" : "刷新目录，或手动输入模型 ID。"}</p></div>}
                 </div>
-                <div className="model-service-manual"><Input aria-label="模型 ID" placeholder={`手动输入${labels[capability]}模型 ID`} value={manualName} onChange={(event) => setManualName(event.target.value)} onPressEnter={addManual} /><Button disabled={busy || protocolLoading || !manualName.trim()} onClick={addManual}>添加</Button></div>
+                </>}
+                {comfyService && (selectedModels.length > 1 || interfaceProfile.comfyui || addingWorkflow) && <div className="comfy-workflow-picker">{selectedModels.length > 1 && <><Select aria-label="选择工作流" value={configuredModel} options={selectedModels.map(value => ({ value, label: draft.modelProfiles?.find(item => item.model === value)?.displayName || value }))} onChange={setInterfaceModel} /><Popconfirm title="移除当前工作流？" description="保存渠道后生效，已提交的任务不受影响。" okText="移除" cancelText="取消" onConfirm={() => { patch({ models: draft.models.filter(id => id !== configuredModel), modelProfiles: draft.modelProfiles?.filter(profile => profile.model !== configuredModel) }); setInterfaceModel(""); }}><Button type="text" size="small" danger aria-label="移除当前工作流" icon={<Trash2 size={14} />} /></Popconfirm></>}<Button size="small" type="text" onClick={() => setAddingWorkflow(!addingWorkflow)}>{addingWorkflow ? "取消添加" : "添加工作流"}</Button></div>}
+                {(!comfyService || addingWorkflow || !selectedModels.length) && <div className="model-service-manual"><Input aria-label={comfyService ? "工作流名称" : "模型 ID"} placeholder={comfyService ? "工作流名称，例如：产品图生成" : `手动输入${labels[capability]}模型 ID`} value={manualName} onChange={(event) => setManualName(event.target.value)} onPressEnter={addManual} /><Button disabled={busy || protocolLoading || !manualName.trim()} onClick={addManual}>添加</Button></div>}
+                {comfyService && selectedModels.length > 0 && <>
+                    <ConfiguredProviderEditor key={configuredModel} channel={draft} profile={interfaceProfile} onChange={updateInterface} comfyConnection={comfyConnection} onJSONEditingChange={setWorkflowJSONEditing} />
+                    {interfaceProfile.comfyui && <details className="model-service-connection-options"><summary>更多生成设置</summary><ChannelModelSettings draft capabilitiesOnly channel={{ ...draft, models: [configuredModel] }} onChange={profiles => setDraft(current => ({ ...current, modelProfiles: mergeCategoryModelProfiles(current, profiles) }))} /></details>}
+                </>}
                 {capability === "audio" && draft.modelProfiles?.filter((profile) => draft.models.includes(profile.model) && (profile.protocol === "doubao-tts" || profile.protocol === "xfyun-tts")).map((profile) => <div className="model-service-native-speech" key={profile.model}>
                     <h3>{profile.protocol === "doubao-tts" ? "豆包语音配置" : "讯飞语音配置"} · {profile.model}</h3>
                     <p className="model-service-contract-note">{profile.protocol === "doubao-tts" ? "使用语音控制台的 API Key，音色需与资源 ID 匹配；方舟模型的 API Key 不能替代语音凭证。" : "填写在线语音合成（流式版）的 APPID、API Key 和 API Secret，发音人需在控制台开通。"}当前输出 MP3。</p>
                     {profile.protocol === "xfyun-tts" && <Form.Item label="APPID"><Input aria-label={`讯飞 APPID ${profile.model}`} value={String(profile.defaultOptions?.appId || "")} onChange={(event) => patch({ modelProfiles: mergeCategoryModelProfiles(draft, [{ ...profile, defaultOptions: { ...profile.defaultOptions, appId: event.target.value } }]) })} /></Form.Item>}
                     <Form.Item label={profile.protocol === "doubao-tts" ? "音色 ID" : "发音人 ID"}><Input aria-label={`语音音色 ID ${profile.model}`} placeholder="填写服务商控制台中的 ID" value={String(profile.defaultOptions?.voice || "")} onChange={(event) => patch({ modelProfiles: mergeCategoryModelProfiles(draft, [{ ...profile, defaultOptions: { ...profile.defaultOptions, voice: event.target.value } }]) })} /></Form.Item>
                 </div>)}
-                {!customMedia && selectedModels.length > 0 && <><button type="button" className="model-service-advanced" aria-expanded={editingCapabilities} onClick={() => setEditingCapabilities(!editingCapabilities)}><Settings2 size={14} />{capability === "video" ? "视频模型协议、输入与输出参数" : "模型协议与参数"}<ChevronDown size={14} /></button>{editingCapabilities && <ChannelModelSettings draft channel={scopedChannel} onChange={(profiles) => setDraft((current) => ({ ...current, modelProfiles: mergeCategoryModelProfiles(current, profiles) }))} />}</>}
+                {!customMedia && !comfyService && selectedModels.length > 0 && <><button type="button" className="model-service-advanced" aria-expanded={editingCapabilities} onClick={() => setEditingCapabilities(!editingCapabilities)}><Settings2 size={14} />{capability === "video" ? "视频模型协议、输入与输出参数" : "模型协议与参数"}<ChevronDown size={14} /></button>{editingCapabilities && <ChannelModelSettings draft channel={scopedChannel} onChange={(profiles) => setDraft((current) => ({ ...current, modelProfiles: mergeCategoryModelProfiles(current, profiles) }))} />}</>}
             </section>
             {(error || notice) && <div className="model-service-feedback">{error && <Alert type="error" showIcon title={error} />}{notice && <Alert type="info" showIcon title={notice} />}</div>}
         </div>
-        <footer className="model-service-footer"><span>更改保存到当前工作区</span><div><Button disabled={busy} onClick={onClose}>取消</Button><Button type="primary" loading={busy} disabled={!draft.models.length || protocolLoading} icon={<Check size={14} />} onClick={() => void save()}>保存</Button></div></footer>
+        <footer className="model-service-footer"><span>{workflowJSONEditing ? "请先应用或取消 JSON 编辑" : "更改保存到当前工作区"}</span><div><Button disabled={busy} onClick={onClose}>取消</Button><Button type="primary" loading={busy} disabled={!draft.models.length || protocolLoading || workflowJSONEditing} icon={<Check size={14} />} onClick={() => void save()}>保存</Button></div></footer>
     </AppModal>;
 }
 

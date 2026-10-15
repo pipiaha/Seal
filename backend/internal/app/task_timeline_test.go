@@ -64,8 +64,8 @@ func TestTimelineTranscriptionFailsFastWhenWhisperUnconfigured(t *testing.T) {
 	if stored.Status != model.TaskStatusFailed {
 		t.Fatalf("status = %q, want failed", stored.Status)
 	}
-	if !strings.Contains(stored.Error, "CANVAS_WHISPER_BASE_URL") {
-		t.Fatalf("error = %q, want mention of CANVAS_WHISPER_BASE_URL", stored.Error)
+	if !strings.Contains(stored.Error, "ASR 页") {
+		t.Fatalf("error = %q, want actionable ASR settings guidance", stored.Error)
 	}
 }
 

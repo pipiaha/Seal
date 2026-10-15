@@ -1,21 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Form, Input, InputNumber, Select } from "antd";
 import { javascript } from "@codemirror/lang-javascript";
-import copy from "copy-to-clipboard";
-import { Clipboard, Eye } from "lucide-react";
+import { Eye } from "lucide-react";
 import { PromptCodeEditor, type PromptCodeEditorHandle } from "@/components/prompt/prompt-code-editor";
-import { PROVIDER_SCRIPT_VARIABLES, providerToScript, providerScriptTemplate, providerScriptAuthoringPrompt } from "@/lib/provider-script";
+import { PROVIDER_SCRIPT_VARIABLES, providerToScript, providerScriptTemplate } from "@/lib/provider-script";
 import type { CustomProvider } from "@/lib/configured-provider";
 import { previewProviderScript, providerScriptSample } from "@/services/api/configured-provider";
 
 const extensions = [javascript()];
 
-export function ProviderScriptEditor({ provider, capability, model, baseUrl, onChange }: { provider: CustomProvider; capability: "image" | "video"; model: string; baseUrl: string; onChange: (provider: CustomProvider) => void }) {
+export function ProviderScriptEditor({ provider, capability, model, onChange }: { provider: CustomProvider; capability: "image" | "video"; model: string; onChange: (provider: CustomProvider) => void }) {
     const editor = useRef<PromptCodeEditorHandle>(null);
     const previewVersion = useRef(0);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
-    const [notice, setNotice] = useState("");
     const [preview, setPreview] = useState<unknown>();
     const [prompt, setPrompt] = useState("生成一段小狗游泳的视频");
     const [seconds, setSeconds] = useState(5);
@@ -26,9 +24,9 @@ export function ProviderScriptEditor({ provider, capability, model, baseUrl, onC
     try { source = providerToScript(provider); } catch (failure) { conversionError = failure instanceof Error ? failure.message : "无法读取已有配置"; }
     useEffect(() => {
         previewVersion.current += 1;
-        setPreview(undefined); setError(""); setNotice(""); setBusy(false);
+        setPreview(undefined); setError(""); setBusy(false);
     }, [source, model, capability]);
-    const updateSource = (script: string) => { onChange({ ...provider, script }); setError(""); setNotice(""); setPreview(undefined); };
+    const updateSource = (script: string) => { onChange({ ...provider, script }); setError(""); setPreview(undefined); };
     const check = async () => {
         const version = ++previewVersion.current;
         setBusy(true); setError(""); setPreview(undefined);
@@ -46,13 +44,9 @@ export function ProviderScriptEditor({ provider, capability, model, baseUrl, onC
         <div className="flex flex-wrap items-center gap-2">
             <Select<"default" | "array" | "multipart"> aria-label="接口脚本模板" placeholder="选择模板" className="min-w-40" disabled={busy} value={undefined} options={[{ value: "default", label: capability === "image" ? "同步图片生成" : "异步视频生成" }, { value: "array", label: "数组与嵌套参数" }, { value: "multipart", label: "Multipart 文件上传" }]} onChange={kind => updateSource(providerScriptTemplate(capability, kind))} />
             <Select<string> aria-label="插入接口变量" placeholder="插入变量" className="min-w-44" disabled={busy} value={undefined} options={PROVIDER_SCRIPT_VARIABLES.map(([value, label]) => ({ value, label: `${label} · ${value}` }))} onChange={value => editor.current?.insertText(value)} />
-            <Button size="small" icon={<Clipboard size={14} />} disabled={busy} onClick={async () => {
-                if (await copy(providerScriptAuthoringPrompt(model, capability, baseUrl))) setNotice("配置说明已复制。把它和供应商 API 文档发给 Seal 创作助手，可让助手检查并直接保存渠道。");
-                else setError("复制失败，请检查剪贴板权限");
-            }}>复制给助手的配置说明</Button>
         </div>
         <div className="text-xs text-foreground/55">JavaScript 接口配置：直接组织数组和嵌套参数；提交、查询和下载由 Seal 执行。</div>
-        <div className="text-xs text-foreground/55">也可以把接口文档、服务地址、模型 ID 和 API Key 一起发给创作助手，让它配置并保存，不需要复制代码或再次填写密钥。</div>
+        <div className="text-xs text-foreground/55"><span className="font-medium text-foreground/75">让创作助手帮你配置</span>：把供应商接口文档、服务地址、模型 ID 和 API Key 发给创作助手，它可以直接配置并保存渠道。</div>
         <div className="h-[360px] overflow-hidden rounded-md border border-border bg-background">
             <PromptCodeEditor ref={editor} value={source} onChange={updateSource} extensions={extensions} readOnly={busy} ariaLabel="JavaScript 接口配置" />
         </div>
@@ -71,6 +65,5 @@ export function ProviderScriptEditor({ provider, capability, model, baseUrl, onC
         <Button icon={<Eye size={14} />} loading={busy} disabled={!source.trim() || Boolean(conversionError)} onClick={() => void check()}>检查并预览请求</Button>
         {preview !== undefined && <div className="space-y-2"><p className="text-xs text-foreground/55">检查通过。以下使用示例输入；鉴权由渠道设置提供，尚未发送给供应商。</p><pre aria-label="接口请求预览" className="max-h-80 overflow-auto rounded-md border border-border bg-background p-3 text-xs whitespace-pre-wrap break-all">{JSON.stringify(preview, null, 2)}</pre></div>}
         {(error || conversionError) && <Alert type="error" showIcon title={error || conversionError} />}
-        {notice && <Alert type="info" title={notice} />}
     </div>;
 }

@@ -14,6 +14,9 @@ type ChannelModelsRequest struct {
 	BaseURL       string           `json:"baseUrl"`
 	APIKey        string           `json:"apiKey"`
 	APIFormat     string           `json:"apiFormat"`
+	ModelsURL     string           `json:"modelsUrl"`
+	AuthType      string           `json:"authType"`
+	AuthHeader    string           `json:"authHeader"`
 	Headers       []OutboundHeader `json:"headers"`
 	ChannelID     string           `json:"channelId"`
 	CredentialRef string           `json:"credentialRef"`
@@ -38,7 +41,21 @@ func (s *Service) FetchChannelModelCatalog(ctx context.Context, actor *model.Use
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := modelcatalog.LoadChannelModelCatalog(ctx, s.fetchChannelModelCatalogBytes, input.BaseURL, input.APIFormat, input.APIKey, headers, s.catalogExtraSource())
+	if input.AuthType != "" && input.AuthType != "none" && input.AuthType != "bearer" && input.AuthType != "header" {
+		return nil, BadAuthRequest("模型目录鉴权方式无效")
+	}
+	if input.AuthType == "header" {
+		if strings.TrimSpace(input.AuthHeader) == "" {
+			return nil, BadAuthRequest("请填写鉴权请求头名称")
+		}
+		if _, err := NormalizeOutboundHeaders([]OutboundHeader{{Name: input.AuthHeader, Value: input.APIKey}}); err != nil {
+			return nil, err
+		}
+	}
+	fetcher := func(ctx context.Context, baseURL, apiFormat, apiKey string, headers []modelcatalog.ChannelHeader) ([]byte, error) {
+		return fetchModelCatalogPages(ctx, baseURL, apiFormat, apiKey, headers, input.ModelsURL, input.AuthType, input.AuthHeader)
+	}
+	catalog, err := modelcatalog.LoadChannelModelCatalog(ctx, fetcher, input.BaseURL, input.APIFormat, input.APIKey, headers, s.catalogExtraSource(), input.AuthType == "none")
 	if err != nil {
 		return nil, mapChannelModelCatalogError(err)
 	}
@@ -46,35 +63,7 @@ func (s *Service) FetchChannelModelCatalog(ctx context.Context, actor *model.Use
 }
 
 func (s *Service) fetchChannelModelCatalogBytes(ctx context.Context, baseURL, apiFormat, apiKey string, headers []modelcatalog.ChannelHeader) ([]byte, error) {
-	target := apiURL(baseURL, "/models")
-	if apiFormat == "gemini" {
-		if !strings.HasSuffix(strings.ToLower(baseURL), "/v1beta") {
-			baseURL += "/v1beta"
-		}
-		target = baseURL + "/models"
-	}
-	if _, err := ValidateOutboundURL(target); err != nil {
-		return nil, err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, BadAuthRequest("模型服务地址无效")
-	}
-	if apiFormat == "gemini" {
-		request.Header.Set("x-goog-api-key", apiKey)
-	} else {
-		request.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	ApplyOutboundHeaders(request, headers)
-	data, _, err := doBinary(request)
-	if err != nil {
-		var httpErr providerHTTPError
-		if errors.As(err, &httpErr) {
-			return nil, modelcatalog.CatalogFetchError{StatusCode: httpErr.StatusCode, Cause: err}
-		}
-		return nil, modelcatalog.CatalogFetchError{Cause: err}
-	}
-	return data, nil
+	return fetchModelCatalogPages(ctx, baseURL, apiFormat, apiKey, headers, "", "bearer", "")
 }
 
 func (s *Service) catalogExtraSource() modelcatalog.CatalogExtraSource {
@@ -115,8 +104,8 @@ func channelModelsUpstreamError(err error) error {
 	switch httpErr.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return NewAppError(http.StatusBadGateway, "模型服务鉴权失败，请检查 API Key")
-	case http.StatusNotFound:
-		return NewAppError(http.StatusBadGateway, "模型服务未提供 /models 接口")
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		return NewAppError(http.StatusBadGateway, "模型服务未提供该目录接口，可配置目录路径或手工添加模型")
 	case http.StatusTooManyRequests:
 		return NewAppError(http.StatusBadGateway, "模型服务请求过于频繁或额度不足")
 	default:
