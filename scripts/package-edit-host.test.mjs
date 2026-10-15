@@ -14,7 +14,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const run = promisify(execFile);
 test('editing packaging rejects missing or mismatched release dependencies', () => {
   assert.throws(() => verifyEditInputs({ target: 'windows/amd64' }), /required/);
-  if (process.env.BEEFTV_NODE_RUNTIME) assert.throws(() => verifyEditInputs({ runtime: process.env.BEEFTV_NODE_RUNTIME, target: process.platform === 'win32' ? 'windows/amd64' : 'darwin/arm64' }), /hypitRoot is required/);
+  if (process.env.BEEFTV_NODE_RUNTIME) assert.throws(() => verifyEditInputs({ runtime: process.env.BEEFTV_NODE_RUNTIME, target: process.platform === 'win32' ? 'windows/amd64' : `darwin/${process.arch === 'x64' ? 'amd64' : 'arm64'}` }), /hypitRoot is required/);
 });
 
 test('shipped Node, Hypit, Skill, Studio, browser and codecs build and export with empty PATH', {
