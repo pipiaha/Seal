@@ -2,6 +2,7 @@ package agentweb
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +15,31 @@ func searchError(status int, reason, message string) *kernel.AppError {
 	err := kernel.NewAppError(status, message)
 	err.Reason = kernel.ErrorReason(reason)
 	return err
+}
+
+func readNetworkError(cause error) error {
+	if errors.Is(cause, context.Canceled) {
+		return context.Canceled
+	}
+	var policy *kernel.AppError
+	if errors.As(cause, &policy) {
+		return policy
+	}
+	var network net.Error
+	if errors.Is(cause, context.DeadlineExceeded) || errors.As(cause, &network) && network.Timeout() {
+		return searchError(http.StatusGatewayTimeout, "web_read_timeout", "网页读取超时，请检查网络或代理后再试")
+	}
+	var dns *net.DNSError
+	if errors.As(cause, &dns) {
+		return searchError(http.StatusBadGateway, "web_read_dns_failed", "网页域名解析失败，请检查网络或代理")
+	}
+	var certificate x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	if errors.As(cause, &certificate) || errors.As(cause, &hostname) || errors.As(cause, &invalid) {
+		return searchError(http.StatusBadGateway, "web_read_tls_failed", "网页证书验证失败，请检查系统时间、证书或代理配置")
+	}
+	return searchError(http.StatusBadGateway, "web_read_network_failed", "无法连接网页，请检查网络或代理；不建议对同一地址反复改用下载或脚本")
 }
 
 func searchNetworkError(provider string, cause error) error {

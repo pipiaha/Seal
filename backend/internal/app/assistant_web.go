@@ -235,14 +235,14 @@ func (s *Service) AssistantWebRead(ctx context.Context, user, project, url strin
 	if _, err := s.UserAssistantProject(user, project); err != nil {
 		return nil, err
 	}
-	return agentweb.Read(ctx, url, offset)
+	return agentweb.Read(ctx, url, offset, s.IsLocalMode())
 }
 func (s *Service) AssistantWebDownload(ctx context.Context, user, project, url, relative string) (any, error) {
 	w, err := s.assistantWork(user, project)
 	if err != nil {
 		return nil, err
 	}
-	response, err := agentweb.Open(ctx, url)
+	response, err := agentweb.Open(ctx, url, s.IsLocalMode())
 	if err != nil {
 		return nil, err
 	}

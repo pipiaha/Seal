@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"golang.org/x/net/html"
 	"infinite-canvas/backend/internal/outbound"
 	"io"
@@ -92,8 +93,14 @@ func searchTavily(ctx context.Context, client *http.Client, config SearchConfig,
 	return sources, nil
 }
 
-func Open(ctx context.Context, raw string) (*http.Response, error) {
-	u, err := outbound.ValidatePublicURLContext(ctx, raw)
+func Open(ctx context.Context, raw string, desktop bool) (*http.Response, error) {
+	u, err := outbound.ParsePublicURL(raw)
+	client := Client()
+	if desktop {
+		client = outbound.DesktopPublicHTTPClient(25 * time.Second)
+	} else if err == nil {
+		u, err = outbound.ValidatePublicURLContext(ctx, raw)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -102,18 +109,18 @@ func Open(ctx context.Context, raw string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", outbound.DefaultOutboundUserAgent)
-	response, err := Client().Do(req)
+	response, err := client.Do(req)
 	if err != nil {
-		return nil, errors.New("web_read_network_failed")
+		return nil, readNetworkError(err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		response.Body.Close()
-		return nil, errors.New("web_read_http_failed")
+		return nil, searchError(response.StatusCode, "web_read_http_failed", fmt.Sprintf("网页返回 HTTP %d", response.StatusCode))
 	}
 	return response, nil
 }
-func Read(ctx context.Context, raw string, offset int) (map[string]any, error) {
-	response, err := Open(ctx, raw)
+func Read(ctx context.Context, raw string, offset int, desktop bool) (map[string]any, error) {
+	response, err := Open(ctx, raw, desktop)
 	if err != nil {
 		return nil, err
 	}
