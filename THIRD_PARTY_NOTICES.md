@@ -41,6 +41,14 @@ terms.
 
 ## Go runtime dependencies
 
+The macOS desktop packages include FFmpeg and FFprobe from
+[ffmpeg-static b6.1.1](https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1).
+Their architecture-specific license and build/source information are shipped in
+`edit-host/media/ffmpeg/LICENSE` and `README.txt` inside the application bundle.
+The corresponding download digests are recorded in `release/macos-runtime.json`.
+Whisper.cpp is built from the pinned v1.9.2 commit under its MIT license; its
+license and the Whisper Base multilingual model origin accompany the ASR runtime.
+
 Versions are locked by `backend/go.sum`.
 
 `github.com/dop251/goja` is the embedded JavaScript parameter-conversion engine,

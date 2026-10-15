@@ -22,19 +22,23 @@ export function verifyLocalAsrRuntime(root, target) {
 }
 
 export function packageLocalAsr({ binRoot, model, license, destination, target = 'windows/amd64' }) {
-  if (target !== 'windows/amd64') throw new Error('This prepared release contains Windows x64 tools; supply target-specific binaries before packaging another platform');
+  if (!['windows/amd64', 'darwin/arm64', 'darwin/amd64'].includes(target)) throw new Error('Unsupported ASR runtime target');
+  const darwin = target.startsWith('darwin/');
+  if (darwin && (process.platform !== 'darwin' || process.arch !== (target.endsWith('/amd64') ? 'x64' : 'arm64'))) throw new Error('Package macOS ASR on a matching native runner');
   if (!destination || fs.existsSync(destination)) throw new Error('Use a new ASR runtime destination');
   if (hash(model) !== BASE_MODEL_SHA256) throw new Error('Whisper Base model digest mismatch');
-  const executable = path.join(binRoot, 'whisper-cli.exe');
+  const executableName = darwin ? 'whisper-cli' : 'whisper-cli.exe';
+  const executable = path.join(binRoot, executableName);
   const version = execFileSync(executable, ['--version'], { encoding: 'utf8', windowsHide: true });
   if (!version.includes(`version: ${ASR_VERSION}`)) throw new Error('Use the pinned whisper.cpp CPU release');
   fs.mkdirSync(path.join(destination, 'bin'), { recursive: true }); fs.mkdirSync(path.join(destination, 'models'));
   for (const name of fs.readdirSync(binRoot)) {
-    if (name === 'whisper-cli.exe' || /^(whisper|ggml.*)\.dll$/i.test(name)) fs.copyFileSync(path.join(binRoot, name), path.join(destination, 'bin', name));
+    if (name === executableName || (!darwin && /^(whisper|ggml.*)\.dll$/i.test(name))) fs.copyFileSync(path.join(binRoot, name), path.join(destination, 'bin', name));
   }
+  if (darwin) fs.chmodSync(path.join(destination, 'bin', executableName), 0o755);
   fs.copyFileSync(model, path.join(destination, 'models/ggml-base.bin'));
   fs.copyFileSync(license, path.join(destination, 'WHISPER-LICENSE'));
-  const manifest = { format: 'beeftv.local-asr@1', target, version: ASR_VERSION, executable: 'bin/whisper-cli.exe',
+  const manifest = { format: 'beeftv.local-asr@1', target, version: ASR_VERSION, executable: `bin/${executableName}`,
     origin: 'https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2',
     model: { name: 'Whisper Base multilingual', file: 'models/ggml-base.bin', size: 147951465, sha256: BASE_MODEL_SHA256,
       origin: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin' }, files: {} };
@@ -44,7 +48,7 @@ export function packageLocalAsr({ binRoot, model, license, destination, target =
   return verifyLocalAsrRuntime(destination, target);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [binRoot, model, license, destination] = process.argv.slice(2);
-  const manifest = packageLocalAsr({ binRoot, model, license, destination });
+  const [binRoot, model, license, destination, target = 'windows/amd64'] = process.argv.slice(2);
+  const manifest = packageLocalAsr({ binRoot, model, license, destination, target });
   console.log(JSON.stringify({ target: manifest.target, version: manifest.version, modelBytes: manifest.model.size, files: Object.keys(manifest.files).length }));
 }

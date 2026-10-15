@@ -12,6 +12,7 @@
 工程和素材留在本机，常用的创作方法留在 Skill 里。
 
 [![Windows](https://img.shields.io/badge/Windows-桌面版-111111)](https://github.com/wenlei-xu/Seal/releases)
+[![macOS](https://img.shields.io/badge/macOS-Apple_Silicon_%26_Intel-111111)](https://github.com/wenlei-xu/Seal/releases)
 [![License](https://img.shields.io/badge/License-MIT-111111)](LICENSE)
 
 **[下载](https://github.com/wenlei-xu/Seal/releases)** · **[快速开始](QUICKSTART.md)** · **[文档](docs/index.md)** · **[更新日志](SEAL_CHANGELOG.md)** · **[反馈](https://github.com/wenlei-xu/Seal/issues)**
@@ -67,11 +68,17 @@ Seal 把这些环节放进同一个工作台：在画布里探索画面，把素
 
 ## 开始使用
 
-1. **下载完整包。** 从 [Seal Releases](https://github.com/wenlei-xu/Seal/releases) 下载 Windows 包，解压后启动 `Seal.exe`，保留整个目录。
+1. **下载完整包。** 从下表或 [Seal Releases](https://github.com/wenlei-xu/Seal/releases) 选择与你的系统对应的应用包。
 2. **添加模型。** 在“模型配置”中添加需要的渠道，选择默认模型和创作助手模型。
 3. **开始创作。** 新建画布，或在“剪辑”里新建工程、导入素材。需要帮助时打开创作助手。
 
-目前正式发行面向 **Windows amd64**。仓库仍在开发，首个稳定版尚未公开时，下载页可能只有依赖包；`runtime-v1` 不是应用安装包。详细说明见 [快速开始](QUICKSTART.md)。
+| 系统 | 下载 v1.7.9 | 启动方式 |
+| --- | --- | --- |
+| Windows 64 位 | [Windows 完整包](https://github.com/wenlei-xu/Seal/releases/download/v1.7.9/Seal-v1.7.9-windows-amd64.zip) | 完整解压，运行 `Seal.exe`，保留整个目录 |
+| macOS · Apple 芯片（M 系列） | [Mac Apple 芯片完整包](https://github.com/wenlei-xu/Seal/releases/download/v1.7.9/Seal-v1.7.9-darwin-arm64.zip) | 解压，将 `Seal.app` 放入“应用程序” |
+| macOS · Intel | [Mac Intel 完整包](https://github.com/wenlei-xu/Seal/releases/download/v1.7.9/Seal-v1.7.9-darwin-amd64.zip) | 解压，将 `Seal.app` 放入“应用程序” |
+
+Mac 为首个发行版本，尚未经过 Apple Developer ID 签名与公证；首次打开可能需要在系统“隐私与安全性”中允许打开。`runtime-v1` 是构建依赖，GitHub 的 Source code 是源码，都不是应用安装包。详细说明见 [快速开始](QUICKSTART.md)。
 
 完整发行包通过本仓库 GitHub Releases 检查更新。下载并校验后，由你保存工作并确认重启安装；源码开发预览关闭自动安装。
 

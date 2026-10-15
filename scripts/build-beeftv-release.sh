@@ -76,6 +76,13 @@ fi
 
 echo "Building Seal $VERSION_VALUE ($COMMIT_VALUE)"
 
+node "$ROOT_DIR/plugin-packages/embed-documentation.mjs"
+for plugin_dir in "$ROOT_DIR"/plugin-packages/*/; do
+  [[ -f "$plugin_dir/manifest.json" ]] || continue
+  plugin_id="$(basename "$plugin_dir")"
+  (cd "$plugin_dir" && zip -q -r "../$plugin_id.beeftv-plugin" .)
+done
+
 mkdir -p "$DESKTOP_DIR/build"
 cp "$ROOT_DIR/assets/app-icon.png" "$DESKTOP_DIR/build/appicon.png"
 
@@ -86,11 +93,13 @@ cp "$ROOT_DIR/assets/app-icon.png" "$DESKTOP_DIR/build/appicon.png"
       -clean \
       -trimpath \
       -platform "$BEEFTV_WAILS_PLATFORM" \
+      -skipbindings -nosyncgomod -m \
       -ldflags "$LDFLAGS"
   else
     go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 build \
       -clean \
       -trimpath \
+      -skipbindings -nosyncgomod -m \
       -ldflags "$LDFLAGS"
   fi
 )
@@ -105,6 +114,8 @@ cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/NOTICE" "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$A
 
 bun "$ROOT_DIR/scripts/package-agent-host.mjs" "$AGENT_TARGET" \
   "$APP_BUNDLE/Contents/Resources/agent-host"
+bun "$ROOT_DIR/scripts/package-edit-host.mjs" "$AGENT_TARGET" \
+  "$APP_BUNDLE/Contents/Resources/edit-host"
 
 # The beeftv CLI ships inside the bundle. External agents (Codex, Claude Code,
 # Cursor) connect through it with their own client credential, so the installed

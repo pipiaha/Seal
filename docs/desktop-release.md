@@ -1,6 +1,6 @@
 # Seal 桌面发布
 
-Seal 的源码和更新包使用 [wenlei-xu/Seal](https://github.com/wenlei-xu/Seal)。首发平台为 Windows amd64；当前 macOS 尚未完成剪辑和本地 ASR 运行包的发行验收。
+Seal 的源码和更新包使用 [wenlei-xu/Seal](https://github.com/wenlei-xu/Seal)。发布流程包含 Windows amd64、macOS arm64（Apple 芯片）和 macOS amd64（Intel）。macOS 在对应架构的 GitHub 原生构建机上打包并验证剪辑导出及本地转写，首版使用临时签名，未经过 Apple Developer ID 签名与公证。
 
 ## 客户端更新
 
@@ -26,7 +26,9 @@ Seal 的源码和更新包使用 [wenlei-xu/Seal](https://github.com/wenlei-xu/S
 
 更新 `VERSION` 与 `SEAL_CHANGELOG.md` 对应版本条目，提交到仓库后，推送匹配的 vMAJOR.MINOR.PATCH 标签，或手动运行工作流。标签触发生成草稿；手动执行时可以明确选择 publish=true 来正式发布。
 
-工作流构建 Wails、前端、CLI、87 个官方插件和两个 Node 运行端，检查 updater 合同，使用实际随包工具离线制作并导出短片，再签名并上传 `desktop-update.json`、ZIP 和 SHA256SUMS。已有同名 Release 拒绝覆盖，正式版本必须高于此前稳定版本。
+工作流在 Windows 和两种架构的 Mac 构建机上构建 Wails、前端、CLI、官方插件和两个 Node 运行端，检查 updater 合同，使用实际随包工具离线制作并导出短片。Mac 同时编译固定提交的 whisper.cpp，使用随包 Whisper Base 识别样例音频，并检查工具没有依赖构建机上的非系统动态库。三种平台全部成功后，签名并上传统一 `desktop-update.json`、三个完整 ZIP 和 SHA256SUMS。已有同名 Release 拒绝覆盖，正式版本必须高于此前稳定版本。
+
+Mac 下载输入固定在 `release/macos-runtime.json`：Chrome 使用 Google 存储对象的固定 generation 和 MD5 校验值，FFmpeg、FFprobe、许可证及 Whisper 模型使用 SHA-256。最终三个发布包统一生成 SHA-256 并纳入签名更新清单。`scripts/prepare-seal-macos-runtime.sh` 准备本机架构的媒体环境，随后由 `scripts/build-beeftv-release.sh` 构建完整 `Seal.app`。原生构建和命令行验收不代表已经完成所有桌面交互的人工验收。
 
 容器镜像的发布流程改为手动执行；普通源码提交不会自动发布容器产品。
 

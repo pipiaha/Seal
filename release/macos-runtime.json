@@ -1,0 +1,53 @@
+{
+  "whisperCommit": "306c88f4d1286aec1bf96e544632897886af5501",
+  "whisperModel": {
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin",
+    "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
+  },
+  "platforms": {
+    "arm64": {
+      "browser": {
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.36/mac-arm64/chrome-headless-shell-mac-arm64.zip?generation=1788797899012720",
+        "md5": "60daa2dfa77813e2e275e3b658955a7f"
+      },
+      "ffmpeg": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64",
+        "sha256": "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584"
+      },
+      "ffprobe": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64",
+        "sha256": "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64"
+      },
+      "license": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-arm64.LICENSE",
+        "sha256": "cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2"
+      },
+      "readme": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-arm64.README",
+        "sha256": "05ba4b92c96605434b1aaae3eedf5a2c280c9607bf78ffca9a5b536d9af2dc6a"
+      }
+    },
+    "amd64": {
+      "browser": {
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.36/mac-x64/chrome-headless-shell-mac-x64.zip?generation=1788803125675408",
+        "md5": "d744eef94c7656149f1d12f9df2dea6e"
+      },
+      "ffmpeg": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64",
+        "sha256": "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894"
+      },
+      "ffprobe": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-x64",
+        "sha256": "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0"
+      },
+      "license": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-x64.LICENSE",
+        "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+      },
+      "readme": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-x64.README",
+        "sha256": "e88a0325f8e5b75210355e37341824f074d3cd82def2125be54c914b62848a36"
+      }
+    }
+  }
+}

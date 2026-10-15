@@ -4,11 +4,11 @@ Seal 是本地 AI 视频创作工作台，提供画布、独立剪辑工程、�
 
 ## 下载与启动
 
-从 [Seal Releases](https://github.com/wenlei-xu/Seal/releases) 下载明确标记为产品版本的 Windows 完整包。`runtime-v1` 是构建依赖，不能当作应用安装包；草稿尚未公开时，发布页可能还没有可安装的稳定版本。
+从 [Seal Releases](https://github.com/wenlei-xu/Seal/releases) 下载对应系统的完整包。Windows 选择 `windows-amd64`；Mac 的 M 系列芯片选择 `darwin-arm64`，Intel 选择 `darwin-amd64`。`runtime-v1` 是构建依赖，GitHub 的 Source code 压缩包是源码，都不是应用安装包。
 
 解压后保留整个目录，启动 `Seal.exe`。旁边的 `agent-host`、`edit-host`、`cli`、`plugin-packages` 和许可证文件都是运行所需内容。
 
-目前正式发布流程面向 Windows amd64。macOS 的完整剪辑和 ASR 运行包尚未完成发行验收，不把原项目的 Mac 安装包当作 Seal 版本。
+Mac 解压后将 `Seal.app` 放入“应用程序”，再启动。Mac 为首个发行版本，使用临时签名，尚未经过 Apple Developer ID 签名与公证；确认来自本仓库后，可按系统“隐私与安全性”中的提示允许首次打开。
 
 ## 配置模型
 
