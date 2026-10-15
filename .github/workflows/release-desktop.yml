@@ -172,6 +172,8 @@ jobs:
         run: |
           set -euo pipefail
           codesign --verify --deep --strict backend/cmd/desktop/build/bin/Seal.app
+          agent=backend/cmd/desktop/build/bin/Seal.app/Contents/Resources/agent-host
+          "$agent/runtime/bin/node" "$agent/runtime/bin/node_modules/npm/bin/npm-cli.js" --version
           node --test edit-host/test/frozen-inputs.test.mjs
           node --test scripts/package-edit-host.test.mjs
           cd backend
